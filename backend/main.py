@@ -51,6 +51,9 @@ class User(Base):
     __tablename__ = "users"
     id         = Column(Integer, primary_key=True, autoincrement=True)
     name       = Column(String, nullable=False)
+    exp        = Column(Integer, default=0)     # 누적 경험치
+    level      = Column(Integer, default=1)     # 현재 레벨
+    gold       = Column(Integer, default=0)     # 보유 골드
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -80,7 +83,7 @@ class FocusLog(Base):
     session_id         = Column(Integer, ForeignKey("lecture_sessions.id"), nullable=False)
     video_time_sec     = Column(Integer, nullable=False)
     focus_score        = Column(Float, nullable=False)       # 0.0 ~ 1.0
-    label              = Column(String, nullable=False)      # focused / drowsy / distracted
+    label              = Column(String, nullable=False)      # focused / unfocused
     is_writing         = Column(Boolean, default=False)      # v5: 필기 중 여부 (CV-B)
     hand_movement      = Column(Float, nullable=True)        # v5: 손 움직임 강도 (분석용)
     playback_rate      = Column(Float, default=1.0)          # v5: 이 시점의 배속
@@ -194,19 +197,41 @@ def get_current_user_id(x_user_id: int = Header(default=1)) -> int:
 # 4. CV 모듈 Stub  (CV 담당자가 실제 모듈 납품 시 이 함수 교체)
 # ──────────────────────────────────────────────────────────────
 
+# ── 집중도 기준점 ──
+FOCUS_THRESHOLD = 0.70  # 이 점수 이상 = focused, 미만 = unfocused
+
+# ── 경험치 / 레벨 / 골드 설정 ──
+EXP_PER_LECTURE  = 50   # 강의 수강 완료
+EXP_PER_CORRECT  = 30   # 퀴즈 정답
+EXP_PER_WRONG    = 10   # 퀴즈 오답
+GOLD_PER_LECTURE = 20   # 강의 완료 골드
+
+def exp_for_next_level(level: int) -> int:
+    """레벨 N → N+1 에 필요한 경험치 (레벨 × 100)."""
+    return level * 100
+
+def grant_exp(user, amount: int, db) -> dict:
+    """경험치 지급 + 레벨업 처리."""""
+    user.exp += amount
+    leveled_up = False
+    while user.exp >= exp_for_next_level(user.level):
+        user.exp -= exp_for_next_level(user.level)
+        user.level += 1
+        leveled_up = True
+    db.commit()
+    return {"leveled_up": leveled_up, "level": user.level, "exp": user.exp}
+
+
 def cv_predict(landmarks: list | None) -> dict:
     """
     CV-A 모듈 stub (집중도 분류).
     실제 CV-A 모듈 납품 시 → predict(landmarks) -> {"score": float, "label": str} 로 교체.
     현재는 랜덤 더미값 반환.
+    졸음(drowsy) 제외 — focused / unfocused 2종만 사용.
     """
     score = round(random.uniform(0.3, 1.0), 3)
-    if score >= 0.7:
-        label = "focused"
-    elif score >= 0.4:
-        label = "drowsy"
-    else:
-        label = "distracted"
+    # 0.7 기준으로 focused / unfocused 2종만
+    label = "focused" if score >= 0.7 else "unfocused"
     return {"score": score, "label": label}
 
 
@@ -232,7 +257,7 @@ def cv_predict_hand(landmarks_seq: list | None, focus_score: float, session_id: 
         return {"is_writing": False, "hand_movement": 0.0, "suggested_playback_rate": 1.0}
 
     # 집중도 낮으면 writing 판정 억제 (CV-A 연동 룰)
-    if focus_score < 0.4:
+    if focus_score < FOCUS_THRESHOLD:
         return {"is_writing": False, "hand_movement": 0.0, "suggested_playback_rate": 1.0}
 
     # stub: 랜덤으로 is_writing 결정 (실제 모듈로 교체 시 이 부분만 변경)
@@ -302,6 +327,10 @@ def llm_grade_answer(question: str, expected_answer: str, user_answer: str) -> d
 class UserResponse(BaseModel):
     id: int
     name: str
+    level: int
+    exp: int
+    exp_next: int       # 다음 레벨까지 필요 경험치
+    gold: int
     today_focus_sec: int
     streak_days: int
     total_crops: int
@@ -348,7 +377,7 @@ class FocusTickRequest(BaseModel):
 
 class FocusTickResponse(BaseModel):
     focus_score: float
-    label: str                            # focused / drowsy / distracted
+    label: str                            # focused / unfocused
     is_writing: bool                      # v5: 필기 중 여부 (CV-B)
     hand_movement: float                  # v5: 손 움직임 강도
     suggested_playback_rate: float        # v5: 권장 배속 (1.0 or 0.8)
@@ -563,6 +592,10 @@ def get_me(
     return UserResponse(
         id=user.id,
         name=user.name,
+        level=user.level,
+        exp=user.exp,
+        exp_next=exp_for_next_level(user.level),
+        gold=user.gold,
         today_focus_sec=get_today_focus_sec(user_id, db),
         streak_days=get_streak_days(user_id, db),
         total_crops=total_crops,
@@ -650,12 +683,12 @@ def end_lecture(
     session.avg_focus = avg_focus
     db.commit()
 
-    # 저점수 구간 추출 (연속 10초 이상 focus_score < 0.4)
+    # 저점수 구간 추출 (연속 10초 이상 focus_score < FOCUS_THRESHOLD)
     low_segments: list[LowFocusSegment] = []
     segment_start = None
     segment_scores = []
     for log in logs:
-        if log.focus_score < 0.4:
+        if log.focus_score < FOCUS_THRESHOLD:
             if segment_start is None:
                 segment_start = log.video_time_sec
             segment_scores.append(log.focus_score)
@@ -674,6 +707,12 @@ def end_lecture(
     # 퀘스트 갱신 및 작물 지급
     auto_update_quests(user_id, db)
     give_crop_reward(user_id, db)
+
+    # 경험치 + 골드 지급 (강의 수강 완료)
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        user.gold += GOLD_PER_LECTURE
+        grant_exp(user, EXP_PER_LECTURE, db)
 
     return SessionEndResponse(
         session_id=body.session_id,
@@ -770,6 +809,65 @@ def get_focus_timeline(
             for l in logs
         ],
     )
+
+
+@app.get("/focus/sessions/today", tags=["집중도"])
+def get_today_sessions(
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """
+    오늘 수강한 세션 목록 + 과목 + 평균 집중도.
+    DashboardPage 과목별 차트 / 수강 기록용.
+    """
+    today = datetime.utcnow().date()
+    sessions = db.query(LectureSession).filter(
+        LectureSession.user_id == user_id,
+        func.date(LectureSession.started_at) == today,
+    ).order_by(LectureSession.started_at.desc()).all()
+
+    result = []
+    for s in sessions:
+        lecture = db.query(Lecture).filter(Lecture.id == s.lecture_id).first()
+        result.append({
+            "session_id":    s.id,
+            "lecture_title": lecture.title   if lecture else "알 수 없음",
+            "subject":       lecture.subject if lecture else "기타",
+            "avg_focus":     s.avg_focus,    # None이면 수강 중
+            "started_at":    s.started_at.isoformat(),
+            "ended_at":      s.ended_at.isoformat() if s.ended_at else None,
+        })
+    return result
+
+
+@app.get("/focus/weekly", tags=["집중도"])
+def get_weekly_focus(
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """
+    이번 주 (월~일) 일별 평균 집중도 반환.
+    DashboardPage 주간 트렌드 차트용.
+    반환: [mon, tue, wed, thu, fri, sat, sun] — 0.0~1.0 float, 데이터 없는 날은 0.
+    """
+    today = datetime.utcnow().date()
+    # 이번 주 월요일
+    mon = today - timedelta(days=today.weekday())
+    days = [mon + timedelta(days=i) for i in range(7)]
+
+    weekly = []
+    for day in days:
+        sessions = db.query(LectureSession).filter(
+            LectureSession.user_id == user_id,
+            func.date(LectureSession.started_at) == day,
+            LectureSession.avg_focus.isnot(None),
+        ).all()
+        if sessions:
+            avg = sum(s.avg_focus for s in sessions) / len(sessions)
+            weekly.append(round(avg, 3))
+        else:
+            weekly.append(0.0)
+    return weekly  # [mon_avg, tue_avg, ..., sun_avg]
 
 
 # ── 퀴즈 ──────────────────────────────────────────────────────
@@ -870,6 +968,12 @@ def answer_quiz(
 
     # 퀴즈 정답 퀘스트 갱신
     auto_update_quests(user_id, db)
+
+    # 경험치 지급 (정답: +30, 오답: +10)
+    user = db.query(User).filter(User.id == user_id).first()
+    if user:
+        exp_amount = EXP_PER_CORRECT if eval_result["is_correct"] else EXP_PER_WRONG
+        grant_exp(user, exp_amount, db)
 
     return QuizAnswerResponse(
         is_correct=eval_result["is_correct"],
@@ -1113,7 +1217,7 @@ def seed_data():
             return  # 이미 시드 완료
 
         # 사용자
-        user = User(name="학습자")
+        user = User(name="학습자", exp=0, level=1, gold=0)
         db.add(user)
         db.flush()
 

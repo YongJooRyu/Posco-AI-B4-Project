@@ -1,31 +1,63 @@
-import { useState, useRef } from "react"
+import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import SharedHeader from "../components/SharedHeader"
 
+const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000"
+
+function formatFocusSec(sec) {
+  if (!sec) return "0분"
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}분`
+}
+
+// 🔌 TODO: 백엔드 API 연결 시 더미 데이터 교체
 const HOURLY = [45,30,20,10,5,0,0,60,75,82,88,70,65,80,85,90,72,60,55,40,30,20,10,5]
+
 const SUBJECTS = [
   { name:"수학",  score:85, color:"#7c6ff7" },
   { name:"영어",  score:72, color:"#22c98a" },
   { name:"물리",  score:60, color:"#38a4f8" },
   { name:"화학",  score:90, color:"#f5a623" },
 ]
+
 const UNFOCUSED = [
   { time:"09:23", duration:"3분", lecture:"수학 - 미분 기초" },
   { time:"11:45", duration:"5분", lecture:"영어 - 독해 전략" },
   { time:"14:12", duration:"2분", lecture:"물리 - 운동 법칙" },
 ]
 
-const QUIZZES = [
-  { id:1, subject:"수학",  question:"미분의 기본 정의는?",  difficulty:"중" },
-  { id:2, subject:"영어",  question:"현재완료 용법 3가지?", difficulty:"하" },
-  { id:3, subject:"물리",  question:"뉴턴 제2법칙 F=?",    difficulty:"하" },
-  { id:4, subject:"화학",  question:"몰(mol)의 정의는?",   difficulty:"상" },
-]
+
 
 export default function DashboardPage() {
-  const [tab, setTab]           = useState("오늘")
-  const [quizOpen, setQuizOpen] = useState(false)
-  const navigate                = useNavigate()
+  const [tab, setTab]         = useState("오늘")
+  const navigate              = useNavigate()
+  const [user, setUser]       = useState(null)
+  const [reviewQueue, setReviewQueue] = useState([])
+  const [loadingUser, setLoadingUser] = useState(true)
+
+  // GET /users/me
+  useEffect(() => {
+    fetch(`${BASE}/users/me`, { headers: { "X-User-Id": "1" } })
+      .then(r => r.json())
+      .then(data => { setUser(data); setLoadingUser(false) })
+      .catch(() => setLoadingUser(false))
+  }, [])
+
+  // GET /quiz/review-queue
+  useEffect(() => {
+    fetch(`${BASE}/quiz/review-queue`, { headers: { "X-User-Id": "1" } })
+      .then(r => r.json())
+      .then(data => setReviewQueue(data ?? []))
+      .catch(() => {})
+  }, [])
+
+  // users/me 기반 요약 카드 값
+  const focusSec    = user?.today_focus_sec ?? 0
+  const totalSec    = focusSec  // 오늘 집중 시간
+  const unfocusSec  = Math.max(0, (user?.streak_days ?? 0) > 0 ? 0 : 0)  // API 없음 — 더미 유지
+  const avgFocusPct = user ? Math.round((focusSec / Math.max(1, focusSec + 2400)) * 100) : null
 
   return (
     <div style={{ width:"100%", height:"100%", background:"#0b1220",
@@ -57,20 +89,22 @@ export default function DashboardPage() {
         {/* 요약 카드 4개 */}
         <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10 }}>
           {[
-            { label:"오늘 집중도 점수", value:"82점",  color:"#7c6ff7" },
-            { label:"오늘 집중 시간",   value:"3h 20m",color:"#22c98a" },
-            { label:"오늘 미집중 시간", value:"40m",   color:"#f5c518" },
-            { label:"졸음 감지",        value:"2회",   color:"#f06060" },
+            { label:"연속 출석",        value: user ? `${user.streak_days}일` : "--",          color:"#7c6ff7" },
+            { label:"오늘 집중 시간",   value: user ? formatFocusSec(focusSec) : "--",         color:"#22c98a" },
+            { label:"복습 대기",        value: `${reviewQueue.length}개`,                      color:"#f5c518" },
+            { label:"레벨",             value: user ? `Lv.${user.level}` : "--",               color:"#38a4f8" },
           ].map((c,i) => (
             <div key={i} style={{ background:"#1a2a3a", border:`1px solid ${c.color}44`,
                                    borderRadius:10, padding:14, textAlign:"center" }}>
               <div style={{ fontSize:11, color:"#aaa", marginBottom:6 }}>{c.label}</div>
-              <div style={{ fontSize:26, fontWeight:700, color:c.color }}>{c.value}</div>
+              <div style={{ fontSize:26, fontWeight:700, color:c.color }}>
+                {loadingUser && i !== 2 ? "..." : c.value}
+              </div>
             </div>
           ))}
         </div>
 
-        {/* 시간대별 집중도 바 차트 */}
+        {/* 시간대별 집중도 */}
         <div style={{ background:"#1a2a3a", border:"1px solid #2a3a5a",
                       borderRadius:10, padding:16 }}>
           <div style={{ fontSize:13, fontWeight:700, marginBottom:12, color:"#7ec8f5" }}>
@@ -85,6 +119,15 @@ export default function DashboardPage() {
                                borderRadius:"3px 3px 0 0", transition:"height 0.3s",
                                opacity:v===0?0.2:0.85 }} />
                 {i%4===0 && <div style={{ fontSize:9, color:"#555" }}>{i}시</div>}
+              </div>
+            ))}
+          </div>
+          {/* 범례 */}
+          <div style={{ display:"flex", gap:16, marginTop:8 }}>
+            {[["#22c98a","집중 (70점↑)"],["#f5c518","보통 (40~70)"],["#f06060","미집중 (40↓)"]].map(([c,l]) => (
+              <div key={l} style={{ display:"flex", alignItems:"center", gap:4, fontSize:10 }}>
+                <div style={{ width:8, height:8, borderRadius:2, background:c }} />
+                <span style={{ color:"#aaa" }}>{l}</span>
               </div>
             ))}
           </div>
@@ -120,7 +163,7 @@ export default function DashboardPage() {
           })}
         </div>
 
-        {/* 미집중 구간 + 퀴즈 대시보드 */}
+        {/* 미집중 구간 + 복습 큐 */}
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
 
           {/* 미집중 구간 */}
@@ -138,12 +181,12 @@ export default function DashboardPage() {
                   <div style={{ color:"#aaa", fontSize:11 }}>{u.lecture}</div>
                 </div>
                 <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                  <span style={{ color:"#f06060" }}>{u.duration}</span>
+                  <span style={{ color:"#f5c518" }}>{u.duration}</span>
                   <button
                     onClick={() => navigate("/lecture", { state:{ seekTo: u.time } })}
                     style={{ fontSize:10, background:"#f5c518", border:"none",
                              borderRadius:5, padding:"3px 8px",
-                             cursor:"pointer", fontWeight:700 }}>
+                             cursor:"pointer", fontWeight:700, color:"#000" }}>
                     다시보기
                   </button>
                 </div>
@@ -151,198 +194,84 @@ export default function DashboardPage() {
             ))}
           </div>
 
-          {/* 퀴즈 대시보드 */}
+          {/* 복습 대기 큐 (망각곡선 기반) */}
           <div style={{ background:"#1a2a3a", border:"1px solid #2a3a5a",
                         borderRadius:10, padding:16 }}>
-            <div style={{ fontSize:13, fontWeight:700, marginBottom:12, color:"#7ec8f5" }}>
-              퀴즈 대시보드
-            </div>
-            {[
-              { label:"오늘 푼 퀴즈", value:"5개",  color:"#22c98a" },
-              { label:"정답률",       value:"80%",  color:"#f5c518" },
-              { label:"획득 경험치",  value:"450",  color:"#7c6ff7" },
-            ].map((s,i) => (
-              <div key={i} style={{ display:"flex", justifyContent:"space-between",
-                                     padding:"8px 0", borderBottom:"1px solid #1a2a4a",
-                                     fontSize:12 }}>
-                <span style={{ color:"#aaa" }}>{s.label}</span>
-                <span style={{ color:s.color, fontWeight:700 }}>{s.value}</span>
+            <div style={{ display:"flex", justifyContent:"space-between",
+                          alignItems:"center", marginBottom:12 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:"#7ec8f5" }}>
+                📅 복습 대기 목록
               </div>
-            ))}
-            <button
-              onClick={() => setQuizOpen(true)}
-              style={{ width:"100%", marginTop:12, padding:"8px 0",
-                       background:"#7c6ff7", border:"none",
-                       borderRadius:8, color:"#fff", fontSize:12,
-                       fontWeight:700, cursor:"pointer" }}>
-              🐾 펫이랑 퀴즈 풀기 →
-            </button>
+              <div style={{ fontSize:10, color:"#aaa" }}>
+                망각곡선 기반
+              </div>
+            </div>
+
+            {reviewQueue.length === 0 ? (
+              <div style={{ fontSize:12, color:"#555", padding:"20px 0", textAlign:"center" }}>
+                오늘 복습할 퀴즈가 없어요 🎉
+              </div>
+            ) : (
+              reviewQueue.slice(0, 5).map((q, i) => (
+                <div key={i} style={{ padding:"8px 0", borderBottom:"1px solid #1a2a4a",
+                                      display:"flex", justifyContent:"space-between",
+                                      alignItems:"center", fontSize:12 }}>
+                  <div>
+                    <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:2 }}>
+                      <span style={{ color: q.is_correct ? "#22c98a" : "#f06060", fontSize:10 }}>
+                        {q.is_correct ? "✅ 이전 정답" : "❌ 이전 오답"}
+                      </span>
+                    </div>
+                    <div style={{ color:"#ccc" }}>{q.question}</div>
+                    <div style={{ fontSize:10, color:"#555", marginTop:2 }}>
+                      복습 예정: {q.next_review_at
+                        ? new Date(q.next_review_at).toLocaleDateString("ko-KR")
+                        : "오늘"}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+
+            {/* 강의 페이지로 이동 안내 */}
+            <div style={{ marginTop:14, padding:"10px 12px",
+                          background:"rgba(124,111,247,0.1)",
+                          border:"1px solid #7c6ff744",
+                          borderRadius:8, fontSize:11, color:"#aaa",
+                          textAlign:"center", lineHeight:1.6 }}>
+              💡 퀴즈는 강의 수강 후<br/>
+              <strong style={{ color:"#7c6ff7" }}>자동으로 시작</strong>돼요
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* 펫 퀴즈 팝업 */}
-      {quizOpen && <PetQuizPopup onClose={() => setQuizOpen(false)} />}
-    </div>
-  )
-}
-
-// ── 펫 퀴즈 팝업 (대시보드용) ──
-
-function PetQuizPopup({ onClose }) {
-  const [messages, setMessages]       = useState([])
-  const [input, setInput]             = useState("")
-  const [loading, setLoading]         = useState(true)
-  const [selectedQuiz, setSelectedQuiz] = useState(null)
-  const chatRef                         = useRef(null)
-
-  // 마운트 시 펫 자동 연결
-  useState(() => {
-    async function connectPet() {
-      try {
-        const res = await fetch("https://stonewall-rival-sternum.ngrok-free.dev", {
-          method:"POST",
-          headers:{ "Content-Type":"application/json", "ngrok-skip-browser-warning":"true" },
-          body:JSON.stringify({ message:"퀴즈 대시보드 연결" }),
-        })
-        const data = await res.json()
-        setMessages([{ type:"npc", text:data.reply }])
-      } catch {
-        setMessages([{ type:"npc", text:"안녕하세요! 📊 오늘의 퀴즈 대시보드입니다. 퀴즈를 선택해 다시 풀어볼까요?" }])
-      } finally {
-        setLoading(false)
-      }
-    }
-    connectPet()
-  })
-
-  function scrollBottom() {
-    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight
-  }
-
-  function selectQuiz(quiz) {
-    if (selectedQuiz?.id === quiz.id || loading) return
-    setSelectedQuiz(quiz)
-    const msg = `[${quiz.subject}] "${quiz.question}" 다시 풀고 싶어요!`
-    setMessages(prev => [...prev, { type:"user", text:msg }])
-    setLoading(true)
-    fetch("https://stonewall-rival-sternum.ngrok-free.dev", {
-      method:"POST",
-      headers:{ "Content-Type":"application/json", "ngrok-skip-browser-warning":"true" },
-      body:JSON.stringify({ message:msg }),
-    })
-      .then(r => r.json())
-      .then(data => { setMessages(prev => [...prev, { type:"npc", text:data.reply }]); setTimeout(scrollBottom,50) })
-      .catch(() => { setMessages(prev => [...prev, { type:"npc", text:`"${quiz.question}" — 한 번 더 답해보세요! 😊` }]); setTimeout(scrollBottom,50) })
-      .finally(() => setLoading(false))
-  }
-
-  async function sendMessage() {
-    if (!input.trim() || loading) return
-    const text = input.trim()
-    setInput("")
-    setMessages(prev => [...prev, { type:"user", text }])
-    setLoading(true)
-    try {
-      const res = await fetch("https://stonewall-rival-sternum.ngrok-free.dev", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json", "ngrok-skip-browser-warning":"true" },
-        body:JSON.stringify({ message:text }),
-      })
-      const data = await res.json()
-      setMessages(prev => [...prev, { type:"npc", text:data.reply }])
-    } catch {
-      setMessages(prev => [...prev, { type:"npc", text:"(더미) 잘 했어요! 다음 문제로 넘어가볼까요?" }])
-    } finally {
-      setLoading(false)
-      setTimeout(scrollBottom, 50)
-    }
-  }
-
-  return (
-    <>
-      <div onClick={onClose}
-        style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.65)", zIndex:200 }} />
-      <div style={{ position:"fixed", top:"50%", left:"50%",
-                    transform:"translate(-50%,-50%)",
-                    background:"#0d1520", border:"1px solid #2a3a5a",
-                    borderRadius:14, padding:24, zIndex:201,
-                    width:"min(520px,92vw)", maxHeight:"88vh", overflowY:"auto" }}>
-        <button onClick={onClose}
-          style={{ position:"absolute", top:12, right:14, background:"none",
-                   border:"none", color:"#555", fontSize:18, cursor:"pointer" }}>✕</button>
-
-        <div style={{ fontSize:16, fontWeight:700, marginBottom:14 }}>🐾 펫 퀴즈 복습</div>
-
-        {/* 연결 상태 */}
-        <div style={{ fontSize:10, color:"#555", marginBottom:12,
-                      display:"flex", alignItems:"center", gap:5 }}>
-          <div style={{ width:7, height:7, borderRadius:"50%",
-                        background:loading?"#f5c518":"#22c98a",
-                        boxShadow:loading?"0 0 6px #f5c518":"0 0 6px #22c98a" }} />
-          {loading ? "펫 연결 중..." : "펫 연결됨"}
-        </div>
-
-        {/* 퀴즈 목록 */}
-        <div style={{ display:"flex", flexDirection:"column", gap:5, marginBottom:14 }}>
-          {QUIZZES.map(q => (
-            <div key={q.id} onClick={() => selectQuiz(q)}
-              style={{ padding:"8px 12px", borderRadius:8, cursor:"pointer",
-                       display:"flex", justifyContent:"space-between", alignItems:"center",
-                       background: selectedQuiz?.id===q.id ? "#1e3050" : "#1a2a3a",
-                       border:`1px solid ${selectedQuiz?.id===q.id ? "#7c6ff7" : "#2a3a5a"}`,
-                       transition:"all 0.15s" }}>
-              <span style={{ fontSize:12 }}>
-                <span style={{ color:"#7ec8f5", marginRight:6, fontSize:11 }}>[{q.subject}]</span>
-                {q.question}
-              </span>
-              <span style={{ fontSize:10, padding:"2px 6px", borderRadius:8, marginLeft:8, flexShrink:0,
-                             background:q.difficulty==="하"?"#1a4a2a":q.difficulty==="중"?"#4a3a1a":"#4a1a1a",
-                             color:q.difficulty==="하"?"#22c98a":q.difficulty==="중"?"#f5c518":"#ff6b6b" }}>
-                {q.difficulty}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        {/* 채팅 */}
-        <div ref={chatRef}
-          style={{ height:180, overflowY:"auto", display:"flex",
-                   flexDirection:"column", gap:6, marginBottom:10,
-                   borderTop:"1px solid #2a3a5a", paddingTop:10 }}>
-          {messages.map((m,i) => (
-            <div key={i} style={{ display:"flex",
-                                   justifyContent:m.type==="user"?"flex-end":"flex-start",
-                                   alignItems:"flex-end", gap:4 }}>
-              {m.type==="npc" && <span style={{ fontSize:14, flexShrink:0 }}>🐾</span>}
-              <div style={{ maxWidth:"78%", padding:"7px 11px", borderRadius:10,
-                             fontSize:12, lineHeight:1.5,
-                             background:m.type==="user"?"#f5c518":"#1a2a4a",
-                             color:m.type==="user"?"#000":"#fff" }}>
-                {m.text}
+        {/* 주간 집중 트렌드 */}
+        <div style={{ background:"#1a2a3a", border:"1px solid #2a3a5a",
+                      borderRadius:10, padding:16 }}>
+          <div style={{ fontSize:13, fontWeight:700, marginBottom:12, color:"#7ec8f5" }}>
+            주간 집중 트렌드
+          </div>
+          <div style={{ display:"flex", alignItems:"flex-end", gap:8, height:60 }}>
+            {[
+              { day:"월", score:72 }, { day:"화", score:85 },
+              { day:"수", score:60 }, { day:"목", score:90 },
+              { day:"금", score:78 }, { day:"토", score:45 },
+              { day:"일", score:82 },
+            ].map((d, i) => (
+              <div key={i} style={{ flex:1, display:"flex", flexDirection:"column",
+                                    alignItems:"center", gap:4 }}>
+                <div style={{ width:"100%", height:`${d.score * 0.6}%`,
+                               background: d.score>=70?"#7c6ff7":d.score>=40?"#f5c518":"#f06060",
+                               borderRadius:"3px 3px 0 0", opacity:0.85,
+                               minHeight:4 }} />
+                <div style={{ fontSize:10, color:"#aaa" }}>{d.day}</div>
+                <div style={{ fontSize:9, color:"#555" }}>{d.score}</div>
               </div>
-            </div>
-          ))}
-          {loading && messages.length>0 && (
-            <div style={{ fontSize:11, color:"#555", paddingLeft:22 }}>입력 중...</div>
-          )}
+            ))}
+          </div>
         </div>
 
-        <div style={{ display:"flex", gap:6 }}>
-          <input value={input} onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key==="Enter" && sendMessage()}
-            placeholder={selectedQuiz ? "답변을 입력하세요..." : "퀴즈를 선택하고 시작하세요..."}
-            disabled={loading}
-            style={{ flex:1, background:"#1a2a4a", border:"1px solid #2a3a5a",
-                     borderRadius:8, padding:"8px 12px", color:"#fff",
-                     fontSize:12, outline:"none", opacity:loading?0.6:1 }} />
-          <button onClick={sendMessage} disabled={loading}
-            style={{ background:"#7c6ff7", border:"none", borderRadius:8,
-                     padding:"8px 16px", fontWeight:700,
-                     cursor:loading?"not-allowed":"pointer",
-                     fontSize:12, color:"#fff", opacity:loading?0.6:1 }}>전송</button>
-        </div>
       </div>
-    </>
+    </div>
   )
 }

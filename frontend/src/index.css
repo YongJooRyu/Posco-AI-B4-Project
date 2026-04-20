@@ -56,10 +56,10 @@ body {
 
 #root {
   width: 100%;
-  max-width: 1126px;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
+  max-width: 100%;      /* ← 1126px 제거 */
+  margin: 0;            /* ← auto 제거 */
+  text-align: left;     /* ← center 제거 */
+  border-inline: none;  /* ← 테두리 제거 */
   min-height: 100svh;
   display: flex;
   flex-direction: column;
