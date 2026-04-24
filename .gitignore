@@ -26,3 +26,4 @@ dist-ssr
 __pycache__/
 *.pyc
 *.mp4
+frontend/.env
