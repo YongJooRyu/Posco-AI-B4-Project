@@ -1,8 +1,11 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
 import SharedHeader from "../components/SharedHeader"
 
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000"
+const HDR  = { "X-User-Id": "1" }
+
+// ── 헬퍼 ──────────────────────────────────────────────────────
 
 function formatFocusSec(sec) {
   if (!sec) return "0분"
@@ -12,263 +15,652 @@ function formatFocusSec(sec) {
   return `${m}분`
 }
 
-// 🔌 TODO: 백엔드 API 연결 시 더미 데이터 교체
-const HOURLY = [45,30,20,10,5,0,0,60,75,82,88,70,65,80,85,90,72,60,55,40,30,20,10,5]
+function secToLabel(sec) {
+  const h = String(Math.floor(sec / 3600)).padStart(2, "0")
+  const m = String(Math.floor((sec % 3600) / 60)).padStart(2, "0")
+  return `${h}:${m}`
+}
 
-const SUBJECTS = [
-  { name:"수학",  score:85, color:"#7c6ff7" },
-  { name:"영어",  score:72, color:"#22c98a" },
-  { name:"물리",  score:60, color:"#38a4f8" },
-  { name:"화학",  score:90, color:"#f5a623" },
-]
+function gradeColor(score) {
+  if (score >= 90) return "#1aa870"   // S - 진한 초록
+  if (score >= 70) return "#22c98a"   // A/B - 초록
+  if (score >= 50) return "#FFC107"   // C - 앰버
+  return "#d94040"                    // D - 빨강
+}
 
-const UNFOCUSED = [
-  { time:"09:23", duration:"3분", lecture:"수학 - 미분 기초" },
-  { time:"11:45", duration:"5분", lecture:"영어 - 독해 전략" },
-  { time:"14:12", duration:"2분", lecture:"물리 - 운동 법칙" },
-]
+function grade(score) {
+  if (score >= 90) return "S"
+  if (score >= 80) return "A"
+  if (score >= 70) return "B"
+  if (score >= 60) return "C"
+  return "D"
+}
+
+// ── 서브 컴포넌트 ─────────────────────────────────────────────
+
+function Card({ children, style = {} }) {
+  return (
+    <div style={{
+      background: "#ffffff", border: "1px solid #e8dcc0",
+      borderRadius: 10, padding: 16, boxShadow: "0 2px 8px rgba(137,81,41,0.08)",
+      ...style,
+    }}>
+      {children}
+    </div>
+  )
+}
+
+function CardTitle({ children }) {
+  return (
+    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: "#895129" }}>
+      {children}
+    </div>
+  )
+}
+
+function Skeleton({ w = "100%", h = 18, style = {} }) {
+  return (
+    <div style={{
+      width: w, height: h, borderRadius: 4,
+      background: "linear-gradient(90deg,#f0e8d8 25%,#f9f5ea 50%,#f0e8d8 75%)",
+      backgroundSize: "200% 100%",
+      animation: "shimmer 1.5s infinite",
+      ...style,
+    }} />
+  )
+}
+
+// ── 시간대별 집중도 바 차트 ────────────────────────────────────
+// focusLogs: [{video_time_sec, focus_score}]
+// 0~23시 슬롯으로 집계
+function HourlyChart({ focusLogs, loading }) {
+  const hourly = Array(24).fill(null)
+
+  if (focusLogs.length > 0) {
+    // focus_log의 video_time_sec은 강의 내 시간 기준
+    // 실제 시각은 없으므로 오늘 세션 시간대를 시뮬레이션
+    // → 각 log를 비율로 0~23 슬롯에 매핑
+    const maxSec = Math.max(...focusLogs.map(l => l.video_time_sec), 1)
+    const buckets = Array(24).fill(null).map(() => [])
+    focusLogs.forEach(l => {
+      const slot = Math.min(23, Math.floor((l.video_time_sec / maxSec) * 24))
+      buckets[slot].push(l.focus_score)
+    })
+    buckets.forEach((b, i) => {
+      if (b.length > 0) {
+        hourly[i] = Math.round((b.reduce((a, v) => a + v, 0) / b.length) * 100)
+      }
+    })
+  }
+
+  return (
+    <Card>
+      <CardTitle>오늘 집중도 타임라인</CardTitle>
+      {loading ? (
+        <Skeleton h={80} />
+      ) : focusLogs.length === 0 ? (
+        <div style={{ fontSize: 12, color: "#8a7a60", textAlign: "center", padding: "20px 0" }}>
+          아직 수강 데이터가 없어요
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "flex-end", height: 80, gap: 2 }}>
+            {hourly.map((v, i) => {
+              const pct = v ?? 0
+              const color = pct >= 70 ? "#22c98a" : pct >= 40 ? "#FFC107" : pct > 0 ? "#d94040" : "#e8dcc0"
+              return (
+                <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column",
+                                       alignItems: "center", gap: 2 }}>
+                  <div style={{
+                    width: "100%", height: pct === 0 ? 2 : `${Math.max(4, pct)}%`,
+                    background: color, borderRadius: "3px 3px 0 0",
+                    opacity: pct === 0 ? 0.15 : 0.9, transition: "height 0.4s",
+                  }} />
+                  {i % 4 === 0 && (
+                    <div style={{ fontSize: 9, color: "#a89878" }}>{i}시</div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
+            {[["#22c98a", "집중 (70↑)"], ["#FFC107", "보통 (40~70)"], ["#d94040", "미집중 (↓40)"]].map(([c, l]) => (
+              <div key={l} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
+                <div style={{ width: 8, height: 8, borderRadius: 2, background: c }} />
+                <span style={{ color: "#8a7a60" }}>{l}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Card>
+  )
+}
+
+// ── 과목별 집중도 ──────────────────────────────────────────────
+// sessions: [{subject, avg_focus}]
+function SubjectChart({ sessions, loading }) {
+  // subject별 avg_focus 평균
+  const subjectMap = {}
+  const COLORS = { "수학": "#895129", "영어": "#22c98a", "물리": "#7c6ff7",
+                   "화학": "#FFC107", "과학": "#d94040", "국어": "#38a4f8" }
+
+  sessions.forEach(s => {
+    if (s.avg_focus == null) return
+    if (!subjectMap[s.subject]) subjectMap[s.subject] = []
+    subjectMap[s.subject].push(s.avg_focus)
+  })
+
+  const subjects = Object.entries(subjectMap).map(([name, scores]) => ({
+    name,
+    score: Math.round((scores.reduce((a, v) => a + v, 0) / scores.length) * 100),
+    color: COLORS[name] ?? "#8a7a60",
+  })).sort((a, b) => b.score - a.score)
+
+  return (
+    <Card>
+      <CardTitle>과목별 집중도 점수</CardTitle>
+      {loading ? (
+        <>
+          {[1, 2, 3].map(i => <Skeleton key={i} h={30} style={{ marginBottom: 10 }} />)}
+        </>
+      ) : subjects.length === 0 ? (
+        <div style={{ fontSize: 12, color: "#8a7a60", textAlign: "center", padding: "20px 0" }}>
+          수강한 과목 데이터가 없어요
+        </div>
+      ) : subjects.map((s, i) => (
+        <div key={i} style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between",
+                         fontSize: 12, marginBottom: 4 }}>
+            <span style={{ color:"#4a3d28", fontWeight:600 }}>{s.name}</span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={{ color: s.color, fontWeight: 700 }}>{s.score}점</span>
+              <span style={{ background: s.color + "33", color: s.color,
+                             fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 4 }}>
+                {grade(s.score)}
+              </span>
+            </div>
+          </div>
+          <div style={{ height: 6, background: "#f0e8d8", borderRadius: 3 }}>
+            <div style={{ width: `${s.score}%`, height: "100%", background: s.color,
+                          borderRadius: 3, transition: "width 0.6s ease" }} />
+          </div>
+        </div>
+      ))}
+    </Card>
+  )
+}
 
 
+// ── LLM 이해도 히스토리 ──────────────────────────────────────
+function QuizScoreHistory({ scores, loading }) {
+  if (loading) return (
+    <Card>
+      <CardTitle>🧠 LLM 퀴즈 이해도 기록</CardTitle>
+      {[1,2,3].map(i => <Skeleton key={i} h={56} style={{ marginBottom:8 }} />)}
+    </Card>
+  )
+
+  // 강의별 평균 집계
+  const byLecture = {}
+  scores.forEach(s => {
+    if (!byLecture[s.lecture_title]) byLecture[s.lecture_title] = []
+    byLecture[s.lecture_title].push(s.total)
+  })
+
+  const scoreColor = (v) => v >= 70 ? "#22c98a" : v >= 40 ? "#FFC107" : "#d94040"
+
+  return (
+    <Card>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+        <CardTitle style={{ margin:0 }}>🧠 LLM 퀴즈 이해도 기록</CardTitle>
+        <div style={{ fontSize:10, color:"#8a7a60" }}>최근 {scores.length}건</div>
+      </div>
+
+      {scores.length === 0 ? (
+        <div style={{ fontSize:12, color:"#8a7a60", textAlign:"center", padding:"20px 0" }}>
+          퀴즈 기록이 없어요. 강의 수강 후 포석호와 퀴즈를 풀어보세요! 🐻‍❄️
+        </div>
+      ) : (
+        <>
+          {/* 강의별 평균 */}
+          <div style={{ marginBottom:14 }}>
+            {Object.entries(byLecture).map(([title, vals]) => {
+              const avg = Math.round(vals.reduce((a,v)=>a+v,0) / vals.length)
+              const color = scoreColor(avg)
+              return (
+                <div key={title} style={{ marginBottom:8 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between",
+                                fontSize:12, marginBottom:3 }}>
+                    <span style={{ color:"#4a3d28", fontWeight:600 }}>{title}</span>
+                    <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+                      <span style={{ color, fontWeight:700 }}>{avg}점</span>
+                      <span style={{ fontSize:10, background:color+"33", color,
+                                     padding:"1px 6px", borderRadius:4, fontWeight:700 }}>
+                        {avg>=70?"B이상":avg>=40?"C":"D"}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ height:6, background:"#f0e8d8", borderRadius:3 }}>
+                    <div style={{ width:`${avg}%`, height:"100%", background:color,
+                                  borderRadius:3, transition:"width 0.6s ease" }} />
+                  </div>
+                  <div style={{ fontSize:10, color:"#8a7a60", marginTop:2 }}>
+                    {vals.length}회 응답 · 최고 {Math.max(...vals)}점
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* 최근 5개 상세 */}
+          <div style={{ borderTop:"1px solid #f0e8d8", paddingTop:10 }}>
+            <div style={{ fontSize:11, color:"#8a7a60", marginBottom:8, fontWeight:600 }}>최근 답변 기록</div>
+            {scores.slice(0,5).map((s,i) => {
+              const color = scoreColor(s.total)
+              return (
+                <div key={i} style={{ padding:"7px 0", borderBottom:"1px solid #f0e8d8", fontSize:11 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                    <span style={{ color:"#4a3d28", fontWeight:600 }}>{s.lecture_title}</span>
+                    <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+                      <span style={{ color, fontWeight:700 }}>{s.total}점</span>
+                      <span style={{ fontSize:9, background: s.match_result==="일치" ? "#e0f5ec"
+                                                             : s.match_result==="부분일치" ? "#fff4cc" : "#fdecea",
+                                     color: s.match_result==="일치" ? "#187050"
+                                          : s.match_result==="부분일치" ? "#895129" : "#c42f1c",
+                                     padding:"1px 6px", borderRadius:4 }}>
+                        {s.match_result || "채점됨"}
+                      </span>
+                    </div>
+                  </div>
+                  {/* 항목별 미니 바 */}
+                  <div style={{ display:"flex", gap:6 }}>
+                    {[
+                      { label:"개념", val:s.concept,  max:40 },
+                      { label:"정확", val:s.accuracy, max:40 },
+                      { label:"구체", val:s.detail,   max:20 },
+                    ].map(item => (
+                      <div key={item.label} style={{ flex:1 }}>
+                        <div style={{ fontSize:9, color:"#8a7a60", marginBottom:1 }}>
+                          {item.label} {item.val}
+                        </div>
+                        <div style={{ height:3, background:"#f0e8d8", borderRadius:2 }}>
+                          <div style={{ width:`${(item.val/item.max)*100}%`, height:"100%",
+                                        background: scoreColor(item.val/item.max*100),
+                                        borderRadius:2 }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* 키워드 */}
+                  {(s.matched_keywords?.length > 0 || s.missing_keywords?.length > 0) && (
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:3, marginTop:5 }}>
+                      {s.matched_keywords?.slice(0,4).map(k => (
+                        <span key={k} style={{ background:"#e0f5ec", color:"#187050",
+                                               border:"1px solid #22c98a66",
+                                               borderRadius:10, padding:"1px 5px", fontSize:9 }}>✓ {k}</span>
+                      ))}
+                      {s.missing_keywords?.slice(0,3).map(k => (
+                        <span key={k} style={{ background:"#fff0f0", color:"#c42f1c",
+                                               border:"1px solid #c42f1c66",
+                                               borderRadius:10, padding:"1px 5px", fontSize:9 }}>✗ {k}</span>
+                      ))}
+                    </div>
+                  )}
+                  {s.comment && (
+                    <div style={{ fontSize:10, color:"#555", marginTop:4 }}>💬 {s.comment}</div>
+                  )}
+                  <div style={{ fontSize:9, color:"#a89878", marginTop:3 }}>
+                    {new Date(s.created_at).toLocaleString("ko-KR")}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </Card>
+  )
+}
+
+// ── 미집중 구간 ────────────────────────────────────────────────
+function UnfocusedSegments({ segments, sessions, loading, navigate }) {
+  // segments: [{start_sec, end_sec, avg_score, session_id, lecture_title}]
+  if (loading) return (
+    <Card>
+      <CardTitle>미집중 구간 모음</CardTitle>
+      {[1, 2, 3].map(i => <Skeleton key={i} h={40} style={{ marginBottom: 8 }} />)}
+    </Card>
+  )
+
+  return (
+    <Card>
+      <CardTitle>미집중 구간 모음</CardTitle>
+      {segments.length === 0 ? (
+        <div style={{ fontSize: 12, color: "#8a7a60", textAlign: "center", padding: "20px 0" }}>
+          오늘 미집중 구간이 없어요 🎉
+        </div>
+      ) : segments.slice(0, 5).map((seg, i) => (
+        <div key={i} style={{ display: "flex", justifyContent: "space-between",
+                               alignItems: "center", padding: "8px 0",
+                               borderBottom: "1px solid #f0e8d8", fontSize: 12 }}>
+          <div>
+            <div style={{ color: "#4a3d28", fontWeight:700 }}>{secToLabel(seg.start_sec)}</div>
+            <div style={{ color: "#8a7a60", fontSize: 11 }}>
+              {seg.lecture_title ?? "강의"} · {Math.round(seg.end_sec - seg.start_sec)}초
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: "#d94040", fontSize: 11 }}>
+              {Math.round(seg.avg_score * 100)}점
+            </span>
+            <button
+              onClick={() => navigate("/lecture", { state: { seekTo: seg.start_sec } })}
+              style={{ fontSize: 10, background: "#895129", border: "none",
+                       borderRadius: 5, padding: "3px 8px",
+                       cursor: "pointer", fontWeight: 700, color: "#ffffff" }}>
+              다시보기
+            </button>
+          </div>
+        </div>
+      ))}
+    </Card>
+  )
+}
+
+// ── 주간 트렌드 ────────────────────────────────────────────────
+function WeeklyTrend({ weeklyData, loading }) {
+  const days = ["월", "화", "수", "목", "금", "토", "일"]
+
+  return (
+    <Card>
+      <CardTitle>주간 집중 트렌드</CardTitle>
+      {loading ? (
+        <Skeleton h={60} />
+      ) : (
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 70 }}>
+          {days.map((day, i) => {
+            const score = weeklyData[i] ?? 0
+            const color = score >= 70 ? "#22c98a" : score >= 40 ? "#FFC107" : score > 0 ? "#d94040" : "#e8dcc0"
+            return (
+              <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column",
+                                     alignItems: "center", gap: 4 }}>
+                <div style={{ width: "100%", minHeight: 4,
+                               height: score > 0 ? `${Math.max(6, score * 0.65)}%` : 4,
+                               background: color, borderRadius: "3px 3px 0 0",
+                               opacity: score === 0 ? 0.2 : 0.9,
+                               transition: "height 0.5s ease" }} />
+                <div style={{ fontSize: 10, color: "#8a7a60" }}>{day}</div>
+                {score > 0 && <div style={{ fontSize: 9, color: "#4a3d28", fontWeight:700 }}>{score}</div>}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ── 메인 컴포넌트 ─────────────────────────────────────────────
 
 export default function DashboardPage() {
-  const [tab, setTab]         = useState("오늘")
-  const navigate              = useNavigate()
-  const [user, setUser]       = useState(null)
-  const [reviewQueue, setReviewQueue] = useState([])
-  const [loadingUser, setLoadingUser] = useState(true)
+  const navigate = useNavigate()
+  const [tab, setTab] = useState("오늘")
 
-  // GET /users/me
+  // ── 서버 상태 ──
+  const [user,        setUser]        = useState(null)
+  const [sessions,    setSessions]    = useState([])   // 오늘 강의 세션들
+  const [focusLogs,   setFocusLogs]   = useState([])   // 오늘 전체 focus_log
+  const [lowSegs,     setLowSegs]     = useState([])   // 미집중 구간
+  const [weeklyData,  setWeeklyData]  = useState(Array(7).fill(0))
+  const [quizScores,  setQuizScores]  = useState([])   // LLM 이해도 점수 기록
+  const [loadingScores, setLoadingScores] = useState(true)
+
+  // ── 로딩 상태 ──
+  const [loadingUser,    setLoadingUser]    = useState(true)
+  const [loadingSessions,setLoadingSessions]= useState(true)
+
+  // ── GET /users/me ──
   useEffect(() => {
-    fetch(`${BASE}/users/me`, { headers: { "X-User-Id": "1" } })
+    fetch(`${BASE}/users/me`, { headers: HDR })
       .then(r => r.json())
       .then(data => { setUser(data); setLoadingUser(false) })
       .catch(() => setLoadingUser(false))
   }, [])
 
-  // GET /quiz/review-queue
+  // ── GET /quiz/scores (LLM 이해도) ──
   useEffect(() => {
-    fetch(`${BASE}/quiz/review-queue`, { headers: { "X-User-Id": "1" } })
+    fetch(`${BASE}/quiz/scores`, { headers: HDR })
       .then(r => r.json())
-      .then(data => setReviewQueue(data ?? []))
-      .catch(() => {})
+      .then(data => { setQuizScores(Array.isArray(data) ? data : []); setLoadingScores(false) })
+      .catch(() => setLoadingScores(false))
   }, [])
 
-  // users/me 기반 요약 카드 값
-  const focusSec    = user?.today_focus_sec ?? 0
-  const totalSec    = focusSec  // 오늘 집중 시간
-  const unfocusSec  = Math.max(0, (user?.streak_days ?? 0) > 0 ? 0 : 0)  // API 없음 — 더미 유지
-  const avgFocusPct = user ? Math.round((focusSec / Math.max(1, focusSec + 2400)) * 100) : null
+  // ── GET /focus/sessions/today → 타임라인 + 과목별 + 미집중 + 주간 ──
+  useEffect(() => {
+    // 오늘 세션 목록 & 각 세션의 timeline 가져오기
+    async function loadSessions() {
+      try {
+        // 1) 오늘 강의 세션 목록
+        const sessRes = await fetch(`${BASE}/focus/sessions/today`, { headers: HDR })
+        if (!sessRes.ok) {
+          console.warn("[Dashboard] /focus/sessions/today 실패:", sessRes.status)
+          throw new Error(`HTTP ${sessRes.status}`)
+        }
+        const sessData = await sessRes.json()
+        console.log(`[Dashboard] 오늘 세션 ${sessData.length}개 로드됨`, sessData)
+        setSessions(sessData)
+
+        // 2) 각 세션 timeline 병렬 fetch
+        const timelines = await Promise.all(
+          sessData.map(s =>
+            fetch(`${BASE}/focus/session/${s.session_id}`, { headers: HDR })
+              .then(r => r.ok ? r.json() : { logs: [] })
+              .then(d => d.logs ?? [])
+              .catch(err => {
+                console.warn(`[Dashboard] 세션 ${s.session_id} timeline 실패`, err)
+                return []
+              })
+          )
+        )
+        const allLogs = timelines.flat()
+        console.log(`[Dashboard] 전체 focus logs: ${allLogs.length}개`)
+        setFocusLogs(allLogs)
+
+        // 3) 미집중 구간 추출 (연속 focus < 0.7, 10초 이상)
+        const segs = []
+        sessData.forEach((sess, si) => {
+          const logs = (timelines[si] ?? []).sort((a, b) => a.video_time_sec - b.video_time_sec)
+          let segStart = null, segScores = []
+          logs.forEach(log => {
+            if (log.focus_score < 0.7) {
+              if (segStart === null) segStart = log.video_time_sec
+              segScores.push(log.focus_score)
+            } else {
+              if (segStart !== null) {
+                const duration = log.video_time_sec - segStart
+                if (duration >= 10) {
+                  segs.push({
+                    start_sec: segStart,
+                    end_sec: log.video_time_sec,
+                    avg_score: segScores.reduce((a, v) => a + v, 0) / segScores.length,
+                    session_id: sess.session_id,
+                    lecture_title: sess.lecture_title,
+                  })
+                }
+                segStart = null; segScores = []
+              }
+            }
+          })
+        })
+        console.log(`[Dashboard] 미집중 구간 ${segs.length}개 추출됨`)
+        setLowSegs(segs)
+
+      } catch (err) {
+        console.error("[Dashboard] loadSessions 실패:", err)
+        setSessions([])
+        setFocusLogs([])
+        setLowSegs([])
+      } finally {
+        setLoadingSessions(false)
+      }
+    }
+
+    // ── 주간 데이터: /focus/weekly (없으면 sessions avg_focus로 근사) ──
+    async function loadWeekly() {
+      try {
+        const r = await fetch(`${BASE}/focus/weekly`, { headers: HDR })
+        if (!r.ok) throw new Error()
+        const data = await r.json()  // {mon:float, tue:float, ...} or [0~6]
+        if (Array.isArray(data)) {
+          setWeeklyData(data.map(v => Math.round(v * 100)))
+        } else {
+          const keys = ["mon","tue","wed","thu","fri","sat","sun"]
+          setWeeklyData(keys.map(k => Math.round((data[k] ?? 0) * 100)))
+        }
+      } catch {
+        // fallback: 오늘치만 넣기 (sessions avg_focus)
+        const today = new Date().getDay()  // 0=일,1=월...
+        const dayIdx = today === 0 ? 6 : today - 1
+        setWeeklyData(prev => {
+          const next = [...prev]
+          // placeholder: 데이터 없으면 0 유지
+          return next
+        })
+      }
+    }
+
+    loadSessions()
+    loadWeekly()
+  }, [])
+
+  // ── 파생값 ──
+  const focusSec = user?.today_focus_sec ?? 0
+
+  // 과목별 sessions 변환 (SubjectChart용)
+  const sessionsWithSubject = sessions.map(s => ({
+    subject: s.subject,
+    avg_focus: s.avg_focus,
+  }))
 
   return (
-    <div style={{ width:"100%", height:"100%", background:"#0b1220",
-                  color:"#fff", fontFamily:"'Noto Sans KR',sans-serif",
-                  overflow:"auto", display:"flex", flexDirection:"column" }}>
+    <div style={{
+      width: "100%", height: "100%", background: "#f9f5ea",
+      color: "#4a3d28", fontFamily: "'Noto Sans KR',sans-serif",
+      overflow: "auto", display: "flex", flexDirection: "column",
+    }}>
+      <style>{`
+        @keyframes shimmer {
+          0%   { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
+      `}</style>
 
       <SharedHeader showHome />
 
       {/* 서브 헤더 */}
-      <div style={{ padding:"12px 20px", borderBottom:"1px solid #1a2a4a",
-                    display:"flex", alignItems:"center", gap:12 }}>
-        <div style={{ fontWeight:700, fontSize:16 }}>📊 학습 리포트</div>
-        <div style={{ display:"flex", gap:4, marginLeft:"auto" }}>
-          {["오늘","이번 주","이번 달"].map(t => (
+      <div style={{ padding: "12px 20px", borderBottom: "3px solid #c89100",
+                    background: "linear-gradient(180deg, #F9E076 0%, #e8c550 100%)",
+                    display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ fontWeight: 700, fontSize: 16, color: "#2a1a0a" }}>📊 학습 리포트</div>
+        <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
+          {["오늘", "이번 주", "이번 달"].map(t => (
             <button key={t} onClick={() => setTab(t)}
-              style={{ padding:"4px 12px", fontSize:11, fontWeight:700,
-                       background: tab===t ? "#f5c518" : "transparent",
-                       color: tab===t ? "#000" : "#aaa",
-                       border:"1px solid", borderColor: tab===t ? "#f5c518" : "#2a3a5a",
-                       borderRadius:20, cursor:"pointer" }}>
+              style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700,
+                       background: tab === t ? "#895129" : "transparent",
+                       color: tab === t ? "#FFFDD0" : "#895129",
+                       border: "1px solid",
+                       borderColor: tab === t ? "#895129" : "#e8c550",
+                       borderRadius: 20, cursor: "pointer" }}>
               {t}
             </button>
           ))}
         </div>
       </div>
 
-      <div style={{ padding:16, display:"flex", flexDirection:"column", gap:12 }}>
+      <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
 
-        {/* 요약 카드 4개 */}
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10 }}>
+        {/* ── 요약 카드 3개 (복습 대기 제거) ── */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
           {[
-            { label:"연속 출석",        value: user ? `${user.streak_days}일` : "--",          color:"#7c6ff7" },
-            { label:"오늘 집중 시간",   value: user ? formatFocusSec(focusSec) : "--",         color:"#22c98a" },
-            { label:"복습 대기",        value: `${reviewQueue.length}개`,                      color:"#f5c518" },
-            { label:"레벨",             value: user ? `Lv.${user.level}` : "--",               color:"#38a4f8" },
-          ].map((c,i) => (
-            <div key={i} style={{ background:"#1a2a3a", border:`1px solid ${c.color}44`,
-                                   borderRadius:10, padding:14, textAlign:"center" }}>
-              <div style={{ fontSize:11, color:"#aaa", marginBottom:6 }}>{c.label}</div>
-              <div style={{ fontSize:26, fontWeight:700, color:c.color }}>
-                {loadingUser && i !== 2 ? "..." : c.value}
-              </div>
+            { label: "연속 출석",      value: user ? `${user.streak_days}일`        : "--", color: "#e67e22", loading: loadingUser },
+            { label: "오늘 집중 시간", value: user ? formatFocusSec(focusSec)       : "--", color: "#22c98a", loading: loadingUser },
+            { label: "레벨",           value: user ? `Lv.${user.level}`             : "--", color: "#7c6ff7", loading: loadingUser },
+          ].map((c, i) => (
+            <div key={i} style={{ background: "#ffffff", border: `2px solid ${c.color}55`,
+                                   borderRadius: 10, padding: 14, textAlign: "center",
+                                   boxShadow: `0 2px 8px ${c.color}22` }}>
+              <div style={{ fontSize: 11, color: "#8a7a60", marginBottom: 6 }}>{c.label}</div>
+              {c.loading ? (
+                <Skeleton h={32} style={{ margin: "0 auto", width: "60%" }} />
+              ) : (
+                <div style={{ fontSize: 26, fontWeight: 700, color: c.color }}>{c.value}</div>
+              )}
             </div>
           ))}
         </div>
 
-        {/* 시간대별 집중도 */}
-        <div style={{ background:"#1a2a3a", border:"1px solid #2a3a5a",
-                      borderRadius:10, padding:16 }}>
-          <div style={{ fontSize:13, fontWeight:700, marginBottom:12, color:"#7ec8f5" }}>
-            오늘 전체 타임라인 (시간대별 집중도)
-          </div>
-          <div style={{ display:"flex", alignItems:"flex-end", height:80, gap:2 }}>
-            {HOURLY.map((v,i) => (
-              <div key={i} style={{ flex:1, display:"flex", flexDirection:"column",
-                                    alignItems:"center", gap:2 }}>
-                <div style={{ width:"100%", height:v===0?2:`${v}%`,
-                               background:v>=70?"#22c98a":v>=40?"#f5c518":"#f06060",
-                               borderRadius:"3px 3px 0 0", transition:"height 0.3s",
-                               opacity:v===0?0.2:0.85 }} />
-                {i%4===0 && <div style={{ fontSize:9, color:"#555" }}>{i}시</div>}
-              </div>
-            ))}
-          </div>
-          {/* 범례 */}
-          <div style={{ display:"flex", gap:16, marginTop:8 }}>
-            {[["#22c98a","집중 (70점↑)"],["#f5c518","보통 (40~70)"],["#f06060","미집중 (40↓)"]].map(([c,l]) => (
-              <div key={l} style={{ display:"flex", alignItems:"center", gap:4, fontSize:10 }}>
-                <div style={{ width:8, height:8, borderRadius:2, background:c }} />
-                <span style={{ color:"#aaa" }}>{l}</span>
-              </div>
-            ))}
-          </div>
+        {/* ── 상단 2컬럼: 시간대별 집중도 + 주간 트렌드 ── */}
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12 }}>
+          <HourlyChart focusLogs={focusLogs} loading={loadingSessions} />
+          <WeeklyTrend weeklyData={weeklyData} loading={loadingSessions} />
         </div>
 
-        {/* 과목별 집중도 */}
-        <div style={{ background:"#1a2a3a", border:"1px solid #2a3a5a",
-                      borderRadius:10, padding:16 }}>
-          <div style={{ fontSize:13, fontWeight:700, marginBottom:12, color:"#7ec8f5" }}>
-            과목별 집중도 점수
-          </div>
-          {SUBJECTS.map((s,i) => {
-            const grade = s.score>=90?"S":s.score>=80?"A":s.score>=70?"B":s.score>=60?"C":"D"
-            return (
-              <div key={i} style={{ marginBottom:10 }}>
-                <div style={{ display:"flex", justifyContent:"space-between",
-                               fontSize:12, marginBottom:4 }}>
-                  <span>{s.name}</span>
-                  <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-                    <span style={{ color:s.color, fontWeight:700 }}>{s.score}점</span>
-                    <span style={{ background:s.color+"33", color:s.color, fontSize:10,
-                                   fontWeight:700, padding:"1px 6px", borderRadius:4 }}>
-                      {grade}
-                    </span>
+        {/* ── 중단 2컬럼: 과목별 집중도 + 미집중 구간 ── */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <SubjectChart sessions={sessionsWithSubject} loading={loadingSessions} />
+          <UnfocusedSegments
+            segments={lowSegs}
+            loading={loadingSessions}
+            navigate={navigate}
+          />
+        </div>
+
+        {/* ── 하단 2컬럼: LLM 이해도 기록 + 오늘 수강 세션 ── */}
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12, alignItems: "start" }}>
+          <QuizScoreHistory scores={quizScores} loading={loadingScores} />
+
+          {/* 오늘 수강 세션 목록 */}
+          <Card>
+            <CardTitle>📚 오늘 수강 기록</CardTitle>
+            {loadingSessions ? (
+              [1, 2, 3].map(i => <Skeleton key={i} h={44} style={{ marginBottom: 8 }} />)
+            ) : sessions.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#8a7a60", textAlign: "center", padding: "20px 0" }}>
+                오늘 수강한 강의가 없어요
+              </div>
+            ) : sessions.map((s, i) => {
+              const pct = s.avg_focus ? Math.round(s.avg_focus * 100) : null
+              const color = pct ? gradeColor(pct) : "#8a7a60"
+              return (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between",
+                                       alignItems: "center", padding: "8px 0",
+                                       borderBottom: "1px solid #f0e8d8", fontSize: 12 }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontWeight: 700, color: "#4a3d28", marginBottom: 2,
+                                   overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {s.lecture_title}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#8a7a60" }}>{s.subject}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: 8 }}>
+                    {pct !== null ? (
+                      <span style={{ color, fontWeight: 700 }}>{pct}점</span>
+                    ) : (
+                      <span style={{ color: "#8a7a60", fontSize: 10 }}>수강 중</span>
+                    )}
+                    <button
+                      onClick={() => navigate("/lecture")}
+                      style={{ fontSize: 10, background: "#895129", border: "none",
+                               borderRadius: 5, padding: "3px 8px",
+                               cursor: "pointer", color: "#FFFDD0" }}>
+                      이어보기
+                    </button>
                   </div>
                 </div>
-                <div style={{ height:6, background:"#0d1520", borderRadius:3 }}>
-                  <div style={{ width:`${s.score}%`, height:"100%", background:s.color,
-                                borderRadius:3, transition:"width 0.5s" }} />
-                </div>
-              </div>
-            )
-          })}
-        </div>
-
-        {/* 미집중 구간 + 복습 큐 */}
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
-
-          {/* 미집중 구간 */}
-          <div style={{ background:"#1a2a3a", border:"1px solid #2a3a5a",
-                        borderRadius:10, padding:16 }}>
-            <div style={{ fontSize:13, fontWeight:700, marginBottom:12, color:"#7ec8f5" }}>
-              미집중 구간 모음
-            </div>
-            {UNFOCUSED.map((u,i) => (
-              <div key={i} style={{ display:"flex", justifyContent:"space-between",
-                                     alignItems:"center", padding:"8px 0",
-                                     borderBottom:"1px solid #1a2a4a", fontSize:12 }}>
-                <div>
-                  <div style={{ color:"#f5c518" }}>{u.time}</div>
-                  <div style={{ color:"#aaa", fontSize:11 }}>{u.lecture}</div>
-                </div>
-                <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                  <span style={{ color:"#f5c518" }}>{u.duration}</span>
-                  <button
-                    onClick={() => navigate("/lecture", { state:{ seekTo: u.time } })}
-                    style={{ fontSize:10, background:"#f5c518", border:"none",
-                             borderRadius:5, padding:"3px 8px",
-                             cursor:"pointer", fontWeight:700, color:"#000" }}>
-                    다시보기
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* 복습 대기 큐 (망각곡선 기반) */}
-          <div style={{ background:"#1a2a3a", border:"1px solid #2a3a5a",
-                        borderRadius:10, padding:16 }}>
-            <div style={{ display:"flex", justifyContent:"space-between",
-                          alignItems:"center", marginBottom:12 }}>
-              <div style={{ fontSize:13, fontWeight:700, color:"#7ec8f5" }}>
-                📅 복습 대기 목록
-              </div>
-              <div style={{ fontSize:10, color:"#aaa" }}>
-                망각곡선 기반
-              </div>
-            </div>
-
-            {reviewQueue.length === 0 ? (
-              <div style={{ fontSize:12, color:"#555", padding:"20px 0", textAlign:"center" }}>
-                오늘 복습할 퀴즈가 없어요 🎉
-              </div>
-            ) : (
-              reviewQueue.slice(0, 5).map((q, i) => (
-                <div key={i} style={{ padding:"8px 0", borderBottom:"1px solid #1a2a4a",
-                                      display:"flex", justifyContent:"space-between",
-                                      alignItems:"center", fontSize:12 }}>
-                  <div>
-                    <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:2 }}>
-                      <span style={{ color: q.is_correct ? "#22c98a" : "#f06060", fontSize:10 }}>
-                        {q.is_correct ? "✅ 이전 정답" : "❌ 이전 오답"}
-                      </span>
-                    </div>
-                    <div style={{ color:"#ccc" }}>{q.question}</div>
-                    <div style={{ fontSize:10, color:"#555", marginTop:2 }}>
-                      복습 예정: {q.next_review_at
-                        ? new Date(q.next_review_at).toLocaleDateString("ko-KR")
-                        : "오늘"}
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-
-            {/* 강의 페이지로 이동 안내 */}
-            <div style={{ marginTop:14, padding:"10px 12px",
-                          background:"rgba(124,111,247,0.1)",
-                          border:"1px solid #7c6ff744",
-                          borderRadius:8, fontSize:11, color:"#aaa",
-                          textAlign:"center", lineHeight:1.6 }}>
-              💡 퀴즈는 강의 수강 후<br/>
-              <strong style={{ color:"#7c6ff7" }}>자동으로 시작</strong>돼요
-            </div>
-          </div>
-        </div>
-
-        {/* 주간 집중 트렌드 */}
-        <div style={{ background:"#1a2a3a", border:"1px solid #2a3a5a",
-                      borderRadius:10, padding:16 }}>
-          <div style={{ fontSize:13, fontWeight:700, marginBottom:12, color:"#7ec8f5" }}>
-            주간 집중 트렌드
-          </div>
-          <div style={{ display:"flex", alignItems:"flex-end", gap:8, height:60 }}>
-            {[
-              { day:"월", score:72 }, { day:"화", score:85 },
-              { day:"수", score:60 }, { day:"목", score:90 },
-              { day:"금", score:78 }, { day:"토", score:45 },
-              { day:"일", score:82 },
-            ].map((d, i) => (
-              <div key={i} style={{ flex:1, display:"flex", flexDirection:"column",
-                                    alignItems:"center", gap:4 }}>
-                <div style={{ width:"100%", height:`${d.score * 0.6}%`,
-                               background: d.score>=70?"#7c6ff7":d.score>=40?"#f5c518":"#f06060",
-                               borderRadius:"3px 3px 0 0", opacity:0.85,
-                               minHeight:4 }} />
-                <div style={{ fontSize:10, color:"#aaa" }}>{d.day}</div>
-                <div style={{ fontSize:9, color:"#555" }}>{d.score}</div>
-              </div>
-            ))}
-          </div>
+              )
+            })}
+          </Card>
         </div>
 
       </div>

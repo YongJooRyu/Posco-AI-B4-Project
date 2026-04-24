@@ -115,6 +115,24 @@ class QuizResult(Base):
     next_review_at = Column(DateTime, nullable=True)
 
 
+class QuizScore(Base):
+    """LLM 퀴즈 이해도 점수 — 답변마다 1행 저장"""
+    __tablename__ = "quiz_scores"
+    id               = Column(Integer, primary_key=True, autoincrement=True)
+    user_id          = Column(Integer, ForeignKey("users.id"), nullable=False)
+    lecture_title    = Column(String, nullable=False)
+    total            = Column(Integer, nullable=False)   # 0~100
+    concept          = Column(Integer, default=0)        # 0~40
+    accuracy         = Column(Integer, default=0)        # 0~40
+    detail           = Column(Integer, default=0)        # 0~20
+    similarity       = Column(Float,   default=0.0)
+    matched_keywords = Column(Text,    default="[]")     # JSON 배열
+    missing_keywords = Column(Text,    default="[]")     # JSON 배열
+    match_result     = Column(String,  default="")       # 일치/부분일치/불일치
+    comment          = Column(Text,    default="")
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+
 class Quest(Base):
     __tablename__ = "quests"
     id           = Column(Integer, primary_key=True, autoincrement=True)
@@ -229,7 +247,7 @@ def cv_predict(landmarks: list | None) -> dict:
     현재는 랜덤 더미값 반환.
     졸음(drowsy) 제외 — focused / unfocused 2종만 사용.
     """
-    score = round(random.uniform(0.3, 1.0), 3)
+    score = round(random.uniform(0.5, 1.0), 3)
     # 0.7 기준으로 focused / unfocused 2종만
     label = "focused" if score >= 0.7 else "unfocused"
     return {"score": score, "label": label}
@@ -332,6 +350,7 @@ class UserResponse(BaseModel):
     exp_next: int       # 다음 레벨까지 필요 경험치
     gold: int
     today_focus_sec: int
+    today_study_sec: int
     streak_days: int
     total_crops: int
 
@@ -505,6 +524,22 @@ def get_today_focus_sec(user_id: int, db: Session) -> int:
     return count * 2  # 2초 폴링이므로 row 수 × 2 = 초
 
 
+def get_today_study_sec(user_id: int, db: Session) -> int:
+    """오늘 전체 수강 시간 (focused + unfocused 합산)."""
+    today = datetime.utcnow().date()
+    sessions = db.query(LectureSession).filter(
+        LectureSession.user_id == user_id,
+        func.date(LectureSession.started_at) == today,
+    ).all()
+    session_ids = [s.id for s in sessions]
+    if not session_ids:
+        return 0
+    count = db.query(FocusLog).filter(
+        FocusLog.session_id.in_(session_ids),
+    ).count()
+    return count * 2
+
+
 def get_streak_days(user_id: int, db: Session) -> int:
     """연속 공부일 수 계산 (세션이 있는 날 기준)."""
     sessions = db.query(
@@ -597,6 +632,7 @@ def get_me(
         exp_next=exp_for_next_level(user.level),
         gold=user.gold,
         today_focus_sec=get_today_focus_sec(user_id, db),
+        today_study_sec=get_today_study_sec(user_id, db),
         streak_days=get_streak_days(user_id, db),
         total_crops=total_crops,
     )
@@ -1209,6 +1245,151 @@ def get_rewards(
 # ──────────────────────────────────────────────────────────────
 # 9. 시드 데이터 (최초 실행 시 DB가 비어 있으면 삽입)
 # ──────────────────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────
+# 8-B. LLM 퀴즈 점수 저장 / 조회
+# ──────────────────────────────────────────────────────────────
+
+import json as _json
+
+
+class QuizScoreRequest(BaseModel):
+    lecture_title:    str
+    total:            int
+    concept:          int       = 0
+    accuracy:         int       = 0
+    detail:           int       = 0
+    similarity:       float     = 0.0
+    matched_keywords: list[str] = []
+    missing_keywords: list[str] = []
+    match_result:     str       = ""
+    comment:          str       = ""
+
+
+class QuizScoreResponse(BaseModel):
+    id:               int
+    lecture_title:    str
+    total:            int
+    concept:          int
+    accuracy:         int
+    detail:           int
+    similarity:       float
+    matched_keywords: list[str]
+    missing_keywords: list[str]
+    match_result:     str
+    comment:          str
+    created_at:       str
+
+
+@app.post("/quiz/score", tags=["퀴즈"])
+def save_quiz_score(
+    body: QuizScoreRequest,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """LLM 답변 이해도 점수를 DB에 저장."""
+    row = QuizScore(
+        user_id          = user_id,
+        lecture_title    = body.lecture_title,
+        total            = body.total,
+        concept          = body.concept,
+        accuracy         = body.accuracy,
+        detail           = body.detail,
+        similarity       = body.similarity,
+        matched_keywords = _json.dumps(body.matched_keywords, ensure_ascii=False),
+        missing_keywords = _json.dumps(body.missing_keywords, ensure_ascii=False),
+        match_result     = body.match_result,
+        comment          = body.comment,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"id": row.id, "status": "saved"}
+
+
+@app.get("/quiz/scores", response_model=list[QuizScoreResponse], tags=["퀴즈"])
+def get_quiz_scores(
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """저장된 LLM 퀴즈 이해도 점수 목록 조회 (최신순)."""
+    rows = (
+        db.query(QuizScore)
+        .filter(QuizScore.user_id == user_id)
+        .order_by(QuizScore.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [
+        QuizScoreResponse(
+            id               = r.id,
+            lecture_title    = r.lecture_title,
+            total            = r.total,
+            concept          = r.concept,
+            accuracy         = r.accuracy,
+            detail           = r.detail,
+            similarity       = r.similarity,
+            matched_keywords = _json.loads(r.matched_keywords or "[]"),
+            missing_keywords = _json.loads(r.missing_keywords or "[]"),
+            match_result     = r.match_result or "",
+            comment          = r.comment or "",
+            created_at       = r.created_at.isoformat(),
+        )
+        for r in rows
+    ]
+
+
+# ──────────────────────────────────────────────────────────────
+# 8-C. LLM 퀴즈 재출제 대상 조회
+# ──────────────────────────────────────────────────────────────
+
+@app.get("/quiz/scores/retry", tags=["퀴즈"])
+def get_retry_scores(
+    threshold: int = 70,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """
+    이해도 threshold 미만 항목 반환.
+    점수 구간별로 재출제 레벨 포함:
+      0~39  → level: "hard"   (완전 재학습)
+      40~59 → level: "medium" (부분 이해)
+      60~69 → level: "easy"   (거의 이해)
+    """
+    rows = (
+        db.query(QuizScore)
+        .filter(
+            QuizScore.user_id == user_id,
+            QuizScore.total < threshold,
+        )
+        .order_by(QuizScore.total.asc())
+        .limit(20)
+        .all()
+    )
+
+    def retry_level(total: int) -> str:
+        if total < 40:  return "hard"
+        if total < 60:  return "medium"
+        return "easy"
+
+    return [
+        {
+            "id":            r.id,
+            "lecture_title": r.lecture_title,
+            "total":         r.total,
+            "concept":       r.concept,
+            "accuracy":      r.accuracy,
+            "detail":        r.detail,
+            "matched_keywords": _json.loads(r.matched_keywords or "[]"),
+            "missing_keywords": _json.loads(r.missing_keywords or "[]"),
+            "match_result":  r.match_result,
+            "comment":       r.comment,
+            "created_at":    r.created_at.isoformat(),
+            "retry_level":   retry_level(r.total),
+        }
+        for r in rows
+    ]
+
 
 def seed_data():
     db = SessionLocal()

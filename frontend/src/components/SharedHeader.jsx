@@ -31,46 +31,52 @@ function PixelIcon({ sx, sy, scale=2, style={} }) {
   )
 }
 
-// UI_Bars에서 단일 바 (가로 바 스트립)
-// 전체 바 너비 = barW, 채워진 비율 = pct(0~100)
-// UI_Bars의 바들: y=0 빨강(완전), y=8 노랑(완전), y=32~128 작은 바들
-// 사용: 큰 바 (Row0: 빨강 x=0~48, 파랑 x=48~96, 초록 x=96~144) 각 48×8
-function PixelBar({ pct, colorSx, scale=3, style={} }) {
-  // colorSx: 0=빨강, 48=파랑, 96=초록
-  const barNativeW = 48
-  const barNativeH = 8
-  const displayW = barNativeW * scale  // 144px
-  const displayH = barNativeH * scale  // 24px
-  const filledW  = Math.round(displayW * Math.min(100, pct) / 100)
+// UI_Bars에서 단일 바
+// 분석 결과:
+//   채워진 바: y=7~9 (3px 높이), x=0(빨강), x=32(파랑), x=64(초록)
+//   빈 바 배경: y=15~19 (5px 높이), x=0~31
+// 각 바 너비: 32px (실제 내용은 28px + 테두리)
+function PixelBar({ pct, colorSx = 64, scale = 3, style = {} }) {
+  // colorSx: 0=빨강, 32=파랑, 64=초록
+  const barNativeW = 32
+  const barNativeH = 3   // y=7~9
+  const bgNativeH  = 5   // y=15~19
+  const displayW   = barNativeW * scale
+  const displayH   = bgNativeH  * scale
 
   return (
     <div style={{
-      position: "relative", width: displayW, height: displayH,
+      position: "relative",
+      width: displayW, height: displayH,
       imageRendering: "pixelated",
       flexShrink: 0,
       ...style,
     }}>
-      {/* 빈 바 배경 (마지막 바 = 흰 빈 바, x=0, y=24, 48x8) */}
+      {/* 빈 바 배경 (y=15, x=0) */}
       <div style={{
         position: "absolute", inset: 0,
         backgroundImage: `url("${UI_BARS}")`,
         backgroundRepeat: "no-repeat",
-        backgroundSize: `${304*scale}px ${128*scale}px`,
-        backgroundPosition: `0px -${24*scale}px`,
+        backgroundSize: `${304 * scale}px ${128 * scale}px`,
+        backgroundPosition: `0px -${15 * scale}px`,
         imageRendering: "pixelated",
       }} />
-      {/* 채워진 바 (clip으로 잘라내기) */}
+      {/* 채워진 바 (clip으로 비율만큼 자르기) */}
       <div style={{
-        position: "absolute", left: 0, top: 0,
-        width: filledW, height: displayH,
+        position: "absolute",
+        left: 0,
+        top: Math.round((displayH - barNativeH * scale) / 2),
+        width: `${Math.max(0, Math.min(100, pct))}%`,
+        height: barNativeH * scale,
         overflow: "hidden",
       }}>
         <div style={{
-          width: displayW, height: displayH,
+          width: displayW,
+          height: barNativeH * scale,
           backgroundImage: `url("${UI_BARS}")`,
           backgroundRepeat: "no-repeat",
-          backgroundSize: `${304*scale}px ${128*scale}px`,
-          backgroundPosition: `-${colorSx*scale}px 0px`,
+          backgroundSize: `${304 * scale}px ${128 * scale}px`,
+          backgroundPosition: `-${colorSx * scale}px -${7 * scale}px`,
           imageRendering: "pixelated",
         }} />
       </div>
@@ -130,118 +136,148 @@ export default function SharedHeader({ showHome = false }) {
   return (
     <div style={{
       display: "flex", alignItems: "center",
-      padding: "6px 16px",
-      background: "#1a1a2e",
-      borderBottom: "3px solid #2a2a4a",
+      padding: "0 16px",
+      height: 60,
+      background: "linear-gradient(180deg, #F9E076 0%, #e8c550 100%)",
+      borderBottom: "3px solid #c89100",
+      boxShadow: "0 2px 12px rgba(0,0,0,0.4)",
       gap: 12, flexShrink: 0,
       imageRendering: "pixelated",
     }}>
       <style>{`
         @keyframes headerBob {
           0%,100% { transform: translateY(0px); }
-          50%      { transform: translateY(-2px); }
+          50%      { transform: translateY(-3px); }
         }
       `}</style>
 
       {/* ── 아바타 프레임 ── */}
       <div style={{
         position: "relative",
-        width: 48, height: 48,
-        background: "#2a1a3a",
-        border: "3px solid #8B6914",
-        borderRadius: 6,
+        width: 50, height: 50,
+        background: "linear-gradient(135deg, #F9E076 0%, #e8c550 100%)",
+        border: "2px solid #c89100",
+        borderRadius: 8,
         display: "flex", alignItems: "center", justifyContent: "center",
         flexShrink: 0,
-        boxShadow: "inset 0 0 0 1px #c8900a",
+        boxShadow: "0 0 0 1px #2a1a0a, inset 0 1px 0 rgba(200, 205, 255, 0.3)",
         imageRendering: "pixelated",
       }}>
         <PlayerAvatar scale={1.4} />
+        {/* 레벨 뱃지 — 아바타 우하단 */}
+        <div style={{
+          position: "absolute", bottom: -6, right: -6,
+          background: "#2a1a0a", border: "2px solid #895129",
+          borderRadius: 4, padding: "0px 5px",
+          fontSize: 9, fontWeight: 700, color: "#FFFDD0",
+          fontFamily: "monospace", lineHeight: "16px",
+          boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
+        }}>
+          {level}
+        </div>
       </div>
 
-      {/* ── 이름 + 레벨 + EXP바 ── */}
-      <div style={{ display:"flex", flexDirection:"column", gap:3, flexShrink:0 }}>
+      {/* ── 이름 + EXP바 + 집중시간 ── */}
+      <div style={{ display:"flex", flexDirection:"column", gap:4, flexShrink:0 }}>
+        {/* 이름 + Lv */}
         <div style={{ display:"flex", alignItems:"center", gap:6 }}>
-          {/* 이름 */}
           <span style={{
-            fontSize: 13, fontWeight: 700, color: "#f5e6c8",
-            textShadow: "1px 1px 0 #000",
-            fontFamily: "monospace",
+            fontSize: 13, fontWeight: 700, color: "#000000",
+            fontFamily: "monospace", letterSpacing: 0.5,
           }}>{name}</span>
-          {/* 레벨 뱃지 */}
-          <div style={{
-            background: "#7c3f00", border: "2px solid #c8900a",
-            borderRadius: 4, padding: "1px 6px",
-            fontSize: 10, fontWeight: 700, color: "#f5c518",
-            fontFamily: "monospace",
-          }}>
-            Lv.{level}
-          </div>
+          <span style={{
+            fontSize: 9, color: "#000000", fontFamily: "monospace",
+            background: "rgba(60,30,0,0.3)", border: "1px solid #2a1a0a",
+            borderRadius: 3, padding: "1px 5px",
+          }}>Lv.{level}</span>
         </div>
-        {/* EXP 바 (파랑) */}
-        <div style={{ display:"flex", alignItems:"center", gap:4 }}>
-          {/* 별 아이콘 (EXP) — UI_Icons row0, col3(x=48) */}
-          <PixelIcon sx={48} sy={0} scale={1.5} />
-          <PixelBar pct={expPct} colorSx={48} scale={2} />
-          <span style={{ fontSize:9, color:"#88aaff", fontFamily:"monospace" }}>
+
+        {/* EXP 바 */}
+        <div style={{ display:"flex", alignItems:"center", gap:5 }}>
+          <PixelIcon sx={48} sy={0} scale={1.4} />
+          <div style={{ position:"relative" }}>
+            <PixelBar pct={expPct} colorSx={64} scale={2} />
+          </div>
+          <span style={{ fontSize:9, color:"#2a1a0a", fontFamily:"monospace" }}>
             {exp}/{expNext}
           </span>
         </div>
-        {/* 오늘 집중 */}
-        <div style={{ fontSize:10, color:"#22c98a", fontWeight:700, fontFamily:"monospace" }}>
-          오늘 집중 {formatFocusSec(focusSec)}
-        </div>
+      </div>
+
+      {/* 구분선 */}
+      <div style={{ width:1, height:36, background:"#c89100", flexShrink:0, margin:"0 4px" }} />
+
+      {/* ── 집중시간 ── */}
+      <div style={{ display:"flex", flexDirection:"column", alignItems:"center",
+                    gap:2, flexShrink:0 }}>
+        <span style={{ fontSize:9, color:"#2a1a0a", fontFamily:"monospace" }}>오늘 집중</span>
+        <span style={{ fontSize:13, fontWeight:700, color:"#2a1a0a",
+                       fontFamily:"monospace" }}>
+          {formatFocusSec(focusSec)}
+        </span>
       </div>
 
       <div style={{ flex:1 }} />
 
+      {/* ── 연속 도전 ── */}
+      <div style={{
+        display:"flex", alignItems:"center", gap:5,
+        background:"rgba(60,30,0,0.25)",
+        border:"1px solid #c89100",
+        borderRadius:6, padding:"5px 10px", flexShrink:0,
+      }}>
+        <PixelIcon sx={144} sy={0} scale={1.5} />
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:0 }}>
+          <span style={{ fontSize:9, color:"#2a1a0a", fontFamily:"monospace" }}>연속</span>
+          <span style={{ fontSize:12, fontWeight:700, color:"#2a1a0a",
+                         fontFamily:"monospace", lineHeight:1 }}>{streak}일</span>
+        </div>
+      </div>
+
       {/* ── 골드 ── */}
-      <div style={{ display:"flex", alignItems:"center", gap:4, flexShrink:0 }}>
-        {/* 코인 아이콘 — UI_Icons row0, col6(x=96) */}
+      <div style={{
+        display:"flex", alignItems:"center", gap:5,
+        background:"rgba(60,30,0,0.25)",
+        border:"1px solid #c89100",
+        borderRadius:6, padding:"5px 10px", flexShrink:0,
+      }}>
         <PixelIcon sx={96} sy={0} scale={2} />
-        <span style={{
-          fontSize: 12, fontWeight: 700, color: "#f5c518",
-          fontFamily: "monospace", textShadow: "1px 1px 0 #000",
-        }}>{gold.toLocaleString()}</span>
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:0 }}>
+          <span style={{ fontSize:9, color:"#2a1a0a", fontFamily:"monospace" }}>골드</span>
+          <span style={{ fontSize:12, fontWeight:700, color:"#2a1a0a",
+                         fontFamily:"monospace", lineHeight:1 }}>
+            {gold.toLocaleString()}
+          </span>
+        </div>
       </div>
 
       {/* ── 날짜 ── */}
       <div style={{
-        fontSize: 11, color: "#aaa",
-        fontFamily: "monospace",
-        flexShrink: 0,
+        fontSize:10, color:"#2a1a0a", fontFamily:"monospace", flexShrink:0,
       }}>{dateStr}</div>
-
-      {/* ── 연속 도전 ── */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 4,
-        background: "rgba(139,63,0,0.4)",
-        border: "2px solid #8B6914",
-        borderRadius: 6, padding: "4px 8px",
-        flexShrink: 0,
-      }}>
-        {/* 불꽃 아이콘 — UI_Icons row0, col9(x=128, 번개) or 실제 불꽃찾기 */}
-        <PixelIcon sx={128} sy={0} scale={1.5} />
-        <span style={{
-          fontSize: 11, fontWeight: 700, color: "#f5c518",
-          fontFamily: "monospace", textShadow: "1px 1px 0 #000",
-        }}>{streak}일 연속</span>
-      </div>
 
       {/* ── 홈 버튼 ── */}
       {showHome && (
         <button
           onClick={() => navigate("/town")}
-          onMouseEnter={e => e.currentTarget.style.borderColor = "#f5c518"}
-          onMouseLeave={e => e.currentTarget.style.borderColor = "#8B6914"}
+          onMouseEnter={e => {
+            e.currentTarget.style.borderColor = "#895129"
+            e.currentTarget.style.background  = "rgba(60,30,0,0.4)"
+          }}
+          onMouseLeave={e => {
+            e.currentTarget.style.borderColor = "#c89100"
+            e.currentTarget.style.background  = "rgba(60,30,0,0.25)"
+          }}
           style={{
-            background: "#2a1a0a", border: "2px solid #8B6914",
-            borderRadius: 6, padding: "5px 10px",
-            color: "#f5e6c8", fontSize: 11,
-            cursor: "pointer", fontFamily: "monospace",
-            display: "flex", alignItems: "center", gap: 4,
-            flexShrink: 0, fontWeight: 700,
-            transition: "border-color 0.15s",
-            textShadow: "1px 1px 0 #000",
+            background:"rgba(60,30,0,0.25)", border:"2px solid #c89100",
+            borderBottom:"3px solid #895129",
+            borderRadius:6, padding:"5px 12px",
+            color:"#FFFDD0", fontSize:11,
+            cursor:"pointer", fontFamily:"monospace",
+            display:"flex", alignItems:"center", gap:4,
+            flexShrink:0, fontWeight:700,
+            transition:"border-color 0.15s, background 0.15s",
+            textShadow:"1px 1px 0 #895129",
           }}>
           🏠 홈
         </button>

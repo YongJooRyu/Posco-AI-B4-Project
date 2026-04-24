@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>퀴즈봇 테스트</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; }
+    h2 { margin-bottom: 16px; color: #a29bfe; }
+
+    #setup { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; justify-content: center; }
+    #setup input { padding: 8px 12px; border-radius: 8px; border: 1px solid #444; background: #2d2d44; color: #eee; width: 200px; }
+    #setup button { padding: 8px 16px; border-radius: 8px; border: none; background: #6c5ce7; color: white; cursor: pointer; }
+    #setup button:hover { background: #a29bfe; }
+
+    #main-row { display: flex; gap: 16px; align-items: flex-start; }
+
+    /* 왼쪽: 채팅 영역 */
+    #chat-section { display: flex; flex-direction: column; }
+    #chat-box { width: 600px; height: 500px; background: #2d2d44; border-radius: 12px; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+    .msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+    .msg.ai { background: #4a4a6a; align-self: flex-start; border-bottom-left-radius: 2px; }
+    .msg.user { background: #6c5ce7; align-self: flex-end; border-bottom-right-radius: 2px; }
+    .msg.system { background: #2d4a2d; align-self: center; font-size: 0.85em; color: #aaa; }
+
+    #input-row { display: flex; gap: 8px; margin-top: 12px; width: 600px; }
+    #input-row input { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #444; background: #2d2d44; color: #eee; font-size: 1em; }
+    #input-row button { padding: 10px 20px; border-radius: 8px; border: none; background: #6c5ce7; color: white; cursor: pointer; font-size: 1em; }
+    #input-row button:hover { background: #a29bfe; }
+    #input-row button:disabled { background: #444; cursor: not-allowed; }
+
+    /* 오른쪽: 이해도 분석 패널 */
+    #analysis-panel {
+      width: 260px;
+      background: #2d2d44;
+      border-radius: 12px;
+      padding: 20px;
+      display: none;
+      flex-direction: column;
+      gap: 16px;
+      height: 500px;
+      overflow-y: auto;
+    }
+    #analysis-panel h3 { color: #a29bfe; font-size: 0.95em; margin-bottom: 4px; }
+
+    .score-circle {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      width: 100px; height: 100px; border-radius: 50%;
+      border: 4px solid #6c5ce7;
+      margin: 0 auto;
+      font-size: 2em; font-weight: bold;
+      transition: border-color 0.4s, color 0.4s;
+    }
+    .score-circle span.label { font-size: 0.4em; color: #aaa; margin-top: 2px; }
+
+    .breakdown { display: flex; flex-direction: column; gap: 10px; }
+    .breakdown-item label { font-size: 0.8em; color: #aaa; display: flex; justify-content: space-between; margin-bottom: 3px; }
+    .bar-bg { background: #444; border-radius: 6px; height: 8px; }
+    .bar-fill { height: 8px; border-radius: 6px; background: #6c5ce7; transition: width 0.5s; }
+
+    .comment-box {
+      background: #1a1a2e;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 0.82em;
+      color: #ccc;
+      line-height: 1.5;
+      min-height: 40px;
+    }
+
+    .history-list { display: flex; flex-direction: column; gap: 6px; }
+    .history-item {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 0.8em; color: #aaa;
+    }
+    .history-dot {
+      width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+<h2>퀴즈봇 프롬프트 테스트</h2>
+
+<div id="setup">
+  <input id="filename" type="text" placeholder="강의 파일명" value="bio_1.json">
+  <button onclick="startSession()">강의 시작</button>
+</div>
+
+<div id="main-row">
+  <!-- 채팅 -->
+  <div id="chat-section">
+    <div id="chat-box"></div>
+    <div id="input-row">
+      <input id="user-input" type="text" placeholder="답변을 입력하세요..." onkeydown="if(event.key==='Enter') sendMessage()" disabled>
+      <button id="send-btn" onclick="sendMessage()" disabled>전송</button>
+    </div>
+  </div>
+
+  <!-- 이해도 분석 패널 -->
+  <div id="analysis-panel">
+    <h3>이해도 분석</h3>
+
+    <div id="score-circle" class="score-circle">
+      <span id="score-num">-</span>
+      <span class="label">/ 100</span>
+    </div>
+
+    <div class="breakdown">
+      <div class="breakdown-item">
+        <label><span>핵심 개념</span><span id="v-concept">-/40</span></label>
+        <div class="bar-bg"><div id="b-concept" class="bar-fill" style="width:0%"></div></div>
+      </div>
+      <div class="breakdown-item">
+        <label><span>설명 정확성</span><span id="v-accuracy">-/40</span></label>
+        <div class="bar-bg"><div id="b-accuracy" class="bar-fill" style="width:0%"></div></div>
+      </div>
+      <div class="breakdown-item">
+        <label><span>표현 구체성</span><span id="v-detail">-/20</span></label>
+        <div class="bar-bg"><div id="b-detail" class="bar-fill" style="width:0%"></div></div>
+      </div>
+    </div>
+
+    <div>
+      <h3 style="margin-bottom:6px;">키워드 매칭</h3>
+      <div id="keyword-box" style="display:flex; flex-wrap:wrap; gap:4px; min-height:24px;"></div>
+      <div style="font-size:0.75em; color:#aaa; margin-top:6px;">
+        의미 유사도: <span id="sim-value">-</span>
+      </div>
+    </div>
+
+    <div>
+      <h3 style="margin-bottom:6px;">피드백</h3>
+      <div id="comment-box" class="comment-box">답변을 입력하면 분석이 표시됩니다.</div>
+    </div>
+
+    <div>
+      <h3 style="margin-bottom:8px;">답변 기록</h3>
+      <div id="history-list" class="history-list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const API = "http://127.0.0.1:8000";
+  let questionNum = 0;
+
+  function addMsg(text, role) {
+    const box = document.getElementById("chat-box");
+    const div = document.createElement("div");
+    div.className = `msg ${role}`;
+    div.textContent = text;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  function scoreColor(score) {
+    if (score >= 70) return "#00b894";
+    if (score >= 40) return "#fdcb6e";
+    return "#d63031";
+  }
+
+  function updateAnalysis(data) {
+    const panel = document.getElementById("analysis-panel");
+    panel.style.display = "flex";
+
+    const sd = data.score_data;
+    const total = sd.total;
+    const color = scoreColor(total);
+
+    // 원형 점수
+    document.getElementById("score-num").textContent = total;
+    const circle = document.getElementById("score-circle");
+    circle.style.borderColor = color;
+    circle.style.color = color;
+
+    // 항목별 바
+    document.getElementById("v-concept").textContent = sd.concept + "/40";
+    document.getElementById("b-concept").style.width = (sd.concept / 40 * 100) + "%";
+    document.getElementById("b-concept").style.background = scoreColor(sd.concept / 40 * 100);
+
+    document.getElementById("v-accuracy").textContent = sd.accuracy + "/40";
+    document.getElementById("b-accuracy").style.width = (sd.accuracy / 40 * 100) + "%";
+    document.getElementById("b-accuracy").style.background = scoreColor(sd.accuracy / 40 * 100);
+
+    document.getElementById("v-detail").textContent = sd.detail + "/20";
+    document.getElementById("b-detail").style.width = (sd.detail / 20 * 100) + "%";
+    document.getElementById("b-detail").style.background = scoreColor(sd.detail / 20 * 100);
+
+    // 키워드 매칭 표시
+    const kwBox = document.getElementById("keyword-box");
+    kwBox.innerHTML = "";
+    (sd.matched_keywords || []).forEach(kw => {
+      const chip = document.createElement("span");
+      chip.textContent = "✓ " + kw;
+      chip.style.cssText = "background:#00b894; color:white; padding:3px 8px; border-radius:12px; font-size:0.75em;";
+      kwBox.appendChild(chip);
+    });
+    (sd.missing_keywords || []).forEach(kw => {
+      const chip = document.createElement("span");
+      chip.textContent = "✗ " + kw;
+      chip.style.cssText = "background:#555; color:#ccc; padding:3px 8px; border-radius:12px; font-size:0.75em;";
+      kwBox.appendChild(chip);
+    });
+    document.getElementById("sim-value").textContent = (sd.similarity !== undefined) ? sd.similarity.toFixed(2) : "-";
+
+    // 피드백
+    document.getElementById("comment-box").textContent = sd.comment || "-";
+
+    // 기록
+    questionNum++;
+    const histList = document.getElementById("history-list");
+    const item = document.createElement("div");
+    item.className = "history-item";
+    item.innerHTML = `<div class="history-dot" style="background:${color}"></div><span>Q${questionNum}: ${total}점 — ${sd.comment || ""}</span>`;
+    histList.appendChild(item);
+  }
+
+  function randomTimestamps(min, max, count) {
+    const range = Array.from({length: max - min + 1}, (_, i) => i + min);
+    return range.sort(() => Math.random() - 0.5).slice(0, count);
+  }
+
+  async function startSession() {
+    const filename = document.getElementById("filename").value.trim();
+    if (!filename) return alert("파일명을 입력하세요.");
+
+    questionNum = 0;
+    const focusTimestamps = randomTimestamps(5, 48, 5);
+    document.getElementById("chat-box").innerHTML = "";
+    document.getElementById("analysis-panel").style.display = "none";
+    document.getElementById("history-list").innerHTML = "";
+    addMsg(`[${filename} | 미집중 구간: ${focusTimestamps.join(", ")}분]`, "system");
+
+    const res = await fetch(`${API}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        lecture_filename: filename,
+        subject: "고등학교 생명과학",
+        focus_timestamps: focusTimestamps
+      })
+    });
+    const data = await res.json();
+    addMsg(data.reply, "ai");
+
+    document.getElementById("user-input").disabled = false;
+    document.getElementById("send-btn").disabled = false;
+    document.getElementById("user-input").focus();
+  }
+
+  async function sendMessage() {
+    const input = document.getElementById("user-input");
+    const text = input.value.trim();
+    if (!text) return;
+
+    addMsg(text, "user");
+    input.value = "";
+    input.disabled = true;
+    document.getElementById("send-btn").disabled = true;
+
+    const res = await fetch(`${API}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text })
+    });
+    const data = await res.json();
+    if (data.is_reask) addMsg("🔁 이전에 이해도가 낮았던 내용을 다시 질문합니다.", "system");
+    addMsg(data.reply, "ai");
+
+    if (data.score_data) updateAnalysis(data);
+
+    if (data.is_finished) {
+      addMsg(`최종 점수: ${data.score}/${data.total} | 평균 이해도: ${data.understanding}%`, "system");
+      input.disabled = true;
+      document.getElementById("send-btn").disabled = true;
+    } else {
+      input.disabled = false;
+      document.getElementById("send-btn").disabled = false;
+      input.focus();
+    }
+  }
+</script>
+
+</body>
+</html>
