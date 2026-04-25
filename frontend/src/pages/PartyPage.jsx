@@ -1,13 +1,30 @@
 import { useState, useEffect, useRef } from "react"
-import SharedHeader from "../components/SharedHeader"
+import SharedHeader, {
+  PixelBox, PixelBadge,
+  PIX, BODY_HI, BODY_MAIN, BODY_DARK,
+  LIME_HI, LIME_MAIN, LIME_DARK,
+  COLOR_TEXT, COLOR_TEXT_SUB,
+  pixClip, pixClipSm, bodyGrad, sideShadow,
+} from "../components/SharedHeader"
+
+// 캐릭터 sprite 경로 (모두 512×1280 시트, 행 0=idle down 6프레임)
+const A = "/assets/Cute_Fantasy"
+const CHAR_SHEETS = {
+  kim: `${A}/Player/kim.png`,
+  jo:  `${A}/Player/jo.png`,
+  nam: `${A}/Player/nam.png`,
+  ryu: `${A}/Player/ryu.png`,
+  lee: `${A}/Player/lee.png`,
+}
+const CHAR_ORDER = ["kim", "jo", "nam", "ryu", "lee"]  // 멤버 id 1~5 순서
 
 // 🔌 TODO(백엔드): GET /api/party/members
 const INIT_MEMBERS = [
   { id:1, name:"영환", score:88, status:"focus",   emoji:"🦊", bodyColor:"#895129", legColor:"#895129", isMe:false, studyTime:"01:23", focusTime:"01:05" },
   { id:2, name:"아름", score:72, status:"unfocus",  emoji:"🐱", bodyColor:"#895129", legColor:"#895129", isMe:false, studyTime:"00:58", focusTime:"00:42" },
-  { id:3, name:"준서", score:91, status:"focus",   emoji:"🐻", bodyColor:"#895129", legColor:"#895129", isMe:false, studyTime:"01:45", focusTime:"01:38" },
+  { id:3, name:"효은", score:91, status:"focus",   emoji:"🐻", bodyColor:"#895129", legColor:"#895129", isMe:false, studyTime:"01:45", focusTime:"01:38" },
   { id:4, name:"용주", score:45, status:"unfocus",  emoji:"🐶", bodyColor:"#c89100", legColor:"#895129", isMe:false, studyTime:"00:32", focusTime:"00:10" },
-  { id:5, name:"효은", score:82, status:"focus",   emoji:"🐰", bodyColor:"#895129", legColor:"#6b3d1f", isMe:true,  studyTime:"01:12", focusTime:"00:58" },
+  { id:5, name:"준식", score:82, status:"focus",   emoji:"🐰", bodyColor:"#895129", legColor:"#6b3d1f", isMe:true,  studyTime:"01:12", focusTime:"00:58" },
 ]
 
 const INIT_CHAT = [
@@ -46,35 +63,37 @@ const INDIVIDUAL_MISSIONS = [
 
 // 졸음 제외 — focus / unfocus 2종
 
-// ── TownPage 팝업 스타일 공통 ──
+// 픽셀 스타일 PANEL — LecturePage와 동일한 톤
+// 헤더는 라임 그라디언트 단색 가로 띠
+const hdrGrad = `linear-gradient(180deg,${LIME_HI} 0,${LIME_HI} 3px,${LIME_MAIN} 3px,${LIME_MAIN} calc(100% - 6px),${LIME_DARK} calc(100% - 6px),${LIME_DARK} calc(100% - 3px),${PIX} calc(100% - 3px),${PIX} 100%)`
+
 const PANEL = {
   wrap: {
-    background: "#F9E076",
-    border: "4px solid #c89100",
-    borderBottom: "6px solid #c89100",
-    borderRadius: 10,
     overflow: "hidden",
-    boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+    boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+    clipPath: pixClip,
+    border: `2px solid ${PIX}`,
   },
   header: {
-    background: "linear-gradient(180deg, #F9E076 0%, #e8c550 100%)",
-    borderBottom: "3px solid #c89100",
-    padding: "8px 14px",
+    background: LIME_MAIN,
+    borderBottom: `2px solid ${PIX}`,
+    padding: "9px 12px",
     display: "flex", alignItems: "center", gap: 8,
   },
   headerText: {
-    fontSize: 12, fontWeight: 700, color: "#2a1a0a",
-    textShadow: "none",
+    fontSize: 12, fontWeight: 700, color: COLOR_TEXT, fontFamily: "monospace",
   },
   body: {
-    background: "#FFFDD0",
+    background: BODY_MAIN,
     padding: "12px",
-    color: "#2a1a0a",
+    color: COLOR_TEXT,
+    fontFamily: "monospace",
   },
 }
 const FLOOR_TILE_DATA = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABJUlEQVR4nNVXyRGDQAwDZkvgSyUpI5WlRr7UQPJaZlF8yObIRD9AMjYyxvSv5+PdGZiXtZvGwaKEeAhVMS+reRzlhRPAarTqWJ6GghlP40BVpfGk8xIqr/d6AJHx2tLQkTJeMxo6gYzXjGbXA61/lpea15Ze47o9EPU8yj88B7J8N4Go59l58DUHJDCzwuIjWn3BTFkPPY4Xp14bWgEGyCAaZ0vg6EzPxinSe6tlbXnPfEMkzq4HpGzRS62ithALeP3UfYD9ElIJYDBrH2B4Gv5rH2B9jmhC+0AbhJ2gnua2fUCbjLftA1WHXGofwGrO4FZQc4Dp7EyPmAlE32/GbwmX7AOSRtMX7bFFZ7qWgPdHtdsH6snMTMcbs3Eu2QciT/Ln+8AHEGJSk+T1pdgAAAAASUVORK5CYII="
 const PLAYER_IMG = "/assets/Cute_Fantasy_Free/Player/Player.png"
 const FARMER_IMG = "/assets/Cute_Fantasy/NPCs (Premade)/Farmer_Bob.png"
+const GRASS_TILE = `${A}/Tiles/Grass/Grass_1_Middle.png`
 const STATUS_COLOR = { focus: "#FFC107", unfocus: "#FFC107" }
 
 const CIRCUMFERENCE = 2 * Math.PI * 44  // r=44
@@ -177,33 +196,33 @@ export default function PartyPage() {
         <SharedHeader showHome />
       </div>
 
-      {/* 서브 헤더 */}
-      <div style={{ display:"flex", alignItems:"center", padding:"8px 16px",
-                    background:"linear-gradient(180deg, #F9E076 0%, #e8c550 100%)",
-                    borderBottom:"3px solid #c89100",
-                    gap:12, flexShrink:0, position:"relative", zIndex:9 }}>
-        <div style={{ fontWeight:700, fontSize:13, color:"#2a1a0a", textShadow:"none" }}>🍅 토마토 농장 파티</div>
-        <div style={{ marginLeft:"auto", fontSize:11, color:"#2a1a0a", fontWeight:700 }}>
+      {/* 서브 헤더 (LecturePage 식 라임 띠) */}
+      <div style={{ ...PANEL.header, padding: "10px 16px",
+                    flexShrink: 0, position: "relative", zIndex: 9 }}>
+        <span style={{ ...PANEL.headerText, fontSize: 13 }}>
+          🍅 토마토 농장 파티
+        </span>
+        <div style={{ marginLeft: "auto", fontSize: 11, color: COLOR_TEXT,
+                      fontWeight: 700, fontFamily: "monospace" }}>
           {members.length}명 접속중
         </div>
       </div>
 
       <div style={{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden" }}>
 
-        {/* 캐릭터 맵 */}
+        {/* 캐릭터 맵 (잔디 타일 배경) */}
         <div style={{
           padding:"20px 24px 0",
-          background:"linear-gradient(180deg,#2a1a0a 0%,#2a1a0a 100%)",
+          backgroundImage: `url(${GRASS_TILE})`,
+          backgroundRepeat: "repeat",
+          backgroundSize: "48px 48px",
+          imageRendering: "pixelated",
           display:"flex", alignItems:"flex-end", gap:20, flexWrap:"wrap",
           justifyContent:"center", flexShrink:0, position:"relative", minHeight:240,
         }}>
           {members.map(m => (
             <PartyChar key={m.id} member={m} pomMode={m.isMe ? pomMode : "공부"} />
           ))}
-          {/* 잔디 */}
-          <div style={{ position:"absolute", bottom:0, left:0, right:0, height:18,
-                        background:"linear-gradient(#a86838,#895129)",
-                        borderTop:"2px solid #c89100", pointerEvents:"none" }} />
         </div>
 
         {/* 3열 레이아웃 */}
@@ -250,24 +269,22 @@ export default function PartyPage() {
                 const achieved = idx === 1
                 return (
                   <div key={m.id}
-                    style={{ padding:"8px 0", borderBottom:"1px solid #e8c550",
+                    style={{ padding:"8px 0", borderBottom:`1px solid ${BODY_DARK}`,
                               display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
                     <div>
-                      <div style={{ fontSize:11, color: achieved ? "#c89100" : "#2a1a0a",
-                                     textDecoration: achieved ? "line-through" : "none" }}>
+                      <div style={{ fontSize:11, color: achieved ? COLOR_TEXT_SUB : COLOR_TEXT,
+                                     textDecoration: achieved ? "line-through" : "none",
+                                     fontFamily:"monospace", fontWeight:700 }}>
                         {m.title}
                       </div>
-                      <div style={{ fontSize:9, color:"#a86838", marginTop:2 }}>
+                      <div style={{ fontSize:9, color: COLOR_TEXT_SUB, marginTop:2,
+                                     fontFamily:"monospace" }}>
                         {m.rewards.map(r => `${r.emoji} +${r.amount} ${r.type}`).join(" · ")}
                       </div>
                     </div>
-                    <span style={{ fontSize:10, fontWeight:700, flexShrink:0, marginLeft:6,
-                                   fontSize:10, background: achieved ? "#fff4a0" : "#F9E076",
-                                   border:`1px solid ${achieved ? "#c89100" : "#895129"}`,
-                                   borderRadius:3, padding:"1px 6px",
-                                   color: achieved ? "#895129" : "#895129" }}>
+                    <PixelBadge color={achieved ? "green" : "orange"}>
                       {achieved ? "완료" : "진행중"}
-                    </span>
+                    </PixelBadge>
                   </div>
                 )
               })}
@@ -361,8 +378,10 @@ export default function PartyPage() {
 
               <div style={PANEL.header}>
                 <span style={PANEL.headerText}>🍅 뽀모도로</span>
-                <div style={{ marginLeft:"auto", fontSize:10, color:"#F9E076" }}>
-                  <span style={{ color:"#FFC107", fontWeight:700 }}>{pomCount}/{pomGoal}회</span>
+                <div style={{ marginLeft:"auto", fontSize:10,
+                              fontFamily:"monospace", fontWeight:700,
+                              color: COLOR_TEXT }}>
+                  {pomCount}/{pomGoal}회
                 </div>
               </div>
               <div style={{ ...PANEL.body, padding:"10px" }}>
@@ -477,62 +496,86 @@ export default function PartyPage() {
 function PartyChar({ member: m, pomMode }) {
   // 내 캐릭터는 pomMode 반영, 다른 팀원은 status 기반
   const msg      = m.isMe ? getMyStatusMsg(pomMode) : getMemberStatusMsg(m.status)
-  const msgColor = m.isMe
-    ? (pomMode === "휴식" ? "#FFC107" : "#FFC107")
-    : (m.status === "focus" ? "#FFC107" : "#FFC107")
+  const focused  = m.isMe ? (pomMode !== "휴식") : (m.status === "focus")
+  const msgColor = focused ? "#71b850" : "#feae34"
+
+  // 캐릭터 sprite 경로 (id 1~5 순서 → kim, jo, nam, ryu, lee)
+  const charKey = CHAR_ORDER[(m.id - 1) % CHAR_ORDER.length]
+  const sheetSrc = CHAR_SHEETS[charKey]
+  const SC = 2  // 64×SC = 128px
+
+  // 6프레임 idle 애니메이션 (행 0)
+  const animKf = `
+    @keyframes partyIdle_${m.id} {
+      from { background-position-x: 0px; }
+      to   { background-position-x: -${6 * 64 * SC}px; }
+    }
+  `
 
   return (
     <div style={{ display:"flex", flexDirection:"column", alignItems:"center",
                   marginBottom:20, userSelect:"none" }}>
+      <style>{animKf}</style>
 
       {/* 상태 말풍선 */}
-      <div style={{ position:"relative", marginBottom:3 }}>
-        <div style={{ background:"rgba(13,21,32,0.92)", border:`1px solid ${msgColor}`,
-                      borderRadius:7, padding:"2px 8px", fontSize:9, fontWeight:700,
-                      color:msgColor, whiteSpace:"nowrap" }}>
+      <div style={{ position:"relative", marginBottom:6 }}>
+        <div style={{
+          background: "#1a1206",
+          color: msgColor,
+          fontSize: 10, fontWeight: 700,
+          padding: "3px 10px",
+          border: `2px solid ${PIX}`,
+          clipPath: pixClipSm,
+          fontFamily: "monospace",
+          whiteSpace: "nowrap",
+        }}>
           {msg}
         </div>
-        <div style={{ position:"absolute", bottom:-5, left:"50%",
+        <div style={{ position:"absolute", bottom:-6, left:"50%",
                       transform:"translateX(-50%)", width:0, height:0,
-                      borderLeft:"4px solid transparent",
-                      borderRight:"4px solid transparent",
-                      borderTop:`5px solid ${msgColor}` }} />
+                      borderLeft:"5px solid transparent",
+                      borderRight:"5px solid transparent",
+                      borderTop:`6px solid ${PIX}` }} />
       </div>
 
-      {/* 이름 태그 */}
-      <div style={{ background: m.isMe ? "#FFC107" : "rgba(0,0,0,0.78)",
-                    color: m.isMe ? "#2a1a0a" : "#FFFDD0",
-                    fontSize:9, fontWeight:700, padding:"1px 7px", borderRadius:8,
-                    border:`1px solid ${m.isMe ? "#c89100" : "#6b3d1f"}`,
-                    marginBottom:4, whiteSpace:"nowrap" }}>
+      {/* 이름 태그 (픽셀 박스) */}
+      <div style={{
+        background: m.isMe ? "#feae34" : "#1a1206",
+        color: m.isMe ? "#2a1a0a" : "#FFFDD0",
+        fontSize: 10, fontWeight: 700, padding: "3px 10px",
+        border: `2px solid ${PIX}`,
+        clipPath: pixClipSm,
+        fontFamily: "monospace",
+        marginBottom: 4, whiteSpace: "nowrap",
+      }}>
         {m.name}
       </div>
 
-      {/* 캐릭터 몸통 */}
-      <div style={{ display:"flex", flexDirection:"column", alignItems:"center",
-                    border: m.isMe ? "2px solid #FFC107" : "none",
-                    borderRadius: m.isMe ? 8 : 0,
-                    padding: m.isMe ? 3 : 0 }}>
-        <div style={{ fontSize:28, lineHeight:1 }}>{m.emoji}</div>
-        <div style={{ width:22, height:16, background:m.bodyColor, marginTop:1,
-                      borderRadius:"3px 3px 0 0",
-                      boxShadow:"inset 0 -3px 0 rgba(0,0,0,0.22)" }} />
-        <div style={{ display:"flex", gap:2 }}>
-          {[0,1].map(i => (
-            <div key={i} style={{ width:9, height:13, background:m.legColor,
-                                   borderRadius:"0 0 3px 3px",
-                                   boxShadow:"inset 0 -2px 0 rgba(0,0,0,0.28)" }} />
-          ))}
-        </div>
-      </div>
+      {/* 캐릭터 sprite (행 0 idle down, 6프레임 순환) */}
+      <div style={{
+        width: 64*SC, height: 64*SC,
+        backgroundImage: `url("${sheetSrc}")`,
+        backgroundRepeat: "no-repeat",
+        backgroundSize: `${512*SC}px ${1280*SC}px`,
+        backgroundPosition: "0px 0px",  // 행 0 (idle down)
+        imageRendering: "pixelated",
+        animation: `partyIdle_${m.id} 0.9s steps(6) infinite`,
+        // 내 캐릭터 강조 — 발 아래 옅은 그림자
+        filter: m.isMe ? "drop-shadow(0 0 4px #feae34)" : "none",
+      }} />
 
-      {/* 공부시간 미니 버블 */}
-      <div style={{ marginTop:5, background:"rgba(240,200,122,0.92)", border:"2px solid #c89100",
-                    borderRadius:7, padding:"3px 8px", fontSize:9,
-                    textAlign:"center", minWidth:84,
-                    boxShadow:"0 2px 6px rgba(0,0,0,0.3)" }}>
-        <div style={{ color:"#c89100", fontWeight:700 }}>📚 {m.studyTime}</div>
-        <div style={{ color:"#895129", fontWeight:700 }}>🎯 {m.focusTime}</div>
+      {/* 공부시간 미니 버블 (픽셀 박스) */}
+      <div style={{
+        marginTop: 4,
+        background: bodyGrad,
+        boxShadow: sideShadow,
+        clipPath: pixClipSm,
+        padding: "5px 10px 8px",
+        fontSize: 10, textAlign: "center", minWidth: 92,
+        fontFamily: "monospace",
+      }}>
+        <div style={{ color: COLOR_TEXT_SUB, fontWeight: 700 }}>📚 {m.studyTime}</div>
+        <div style={{ color: COLOR_TEXT, fontWeight: 700 }}>🎯 {m.focusTime}</div>
       </div>
     </div>
   )

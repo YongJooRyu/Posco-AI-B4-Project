@@ -1,38 +1,38 @@
 import { useState, useEffect, useRef } from "react"
 import { useLocation } from "react-router-dom"
-import SharedHeader from "../components/SharedHeader"
-import { startLecture, endLecture, postFocusTick, getLectures, generateQuiz, getReviewQueue } from "../api/index.js"
+import SharedHeader, { PIX, LIME_HI, LIME_MAIN, LIME_DARK, BODY_HI, BODY_MAIN, BODY_DARK, pixClip, sideShadow } from "../components/SharedHeader"
+import { startLecture, endLecture, postFocusTick, getLectures, getReviewQueue } from "../api/index.js"
 
 
-// ── TownPage 팝업 스타일 공통 ──
+// ── Design Tokens (colors imported from SharedHeader) ──
+const hdrGrad  = `linear-gradient(180deg,${PIX} 0,${PIX} 3px,${LIME_MAIN} 3px,${LIME_MAIN} calc(100% - 6px),${LIME_DARK} calc(100% - 6px),${LIME_DARK} calc(100% - 3px),${PIX} calc(100% - 3px),${PIX} 100%)`
+const bodyGrad = `linear-gradient(180deg,${BODY_HI} 0,${BODY_HI} 3px,${BODY_MAIN} 3px,${BODY_MAIN} calc(100% - 6px),${BODY_DARK} calc(100% - 6px),${BODY_DARK} calc(100% - 3px),${PIX} calc(100% - 3px),${PIX} 100%)`
+
+// ── 퀴즈 점수 색상 (저/중/고) ──
+// 고 70+: 초록 / 중 40~69: 주황 / 저 0~39: 빨강
+const SCORE_HI  = "#3e8948"   // 진한 초록
+const SCORE_MID = "#f77622"   // 주황
+const SCORE_LOW = "#e43b44"   // 빨강
+// bar 트랙 색 (배경)
+const SCORE_HI_BG  = "#cceaaa"  // 연초록
+const SCORE_MID_BG = "#ffd16b"  // 연노랑/주황
+const SCORE_LOW_BG = "#ee686e"  // 연한 빨강
+
+// 점수율(0~1) → 색상
+const scoreColor   = (ratio) => ratio >= 0.7 ? SCORE_HI    : ratio >= 0.4 ? SCORE_MID    : SCORE_LOW
+const scoreColorBg = (ratio) => ratio >= 0.7 ? SCORE_HI_BG : ratio >= 0.4 ? SCORE_MID_BG : SCORE_LOW_BG
+// 절대 점수(0~100) → 색상
+const totalColor   = (total) => total >= 70 ? SCORE_HI    : total >= 40 ? SCORE_MID    : SCORE_LOW
 const PANEL = {
-  wrap: {
-    background: "#F9E076",
-    border: "4px solid #c89100",
-    borderBottom: "6px solid #895129",
-    borderRadius: 10,
-    overflow: "hidden",
-    boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-  },
-  header: {
-    background: "linear-gradient(180deg, #c89100 0%, #895129 100%)",
-    borderBottom: "3px solid #c89100",
-    padding: "8px 14px",
-    display: "flex", alignItems: "center", gap: 8,
-  },
-  headerText: {
-    fontSize: 12, fontWeight: 700, color: "#FFFDD0",
-    textShadow: "1px 1px 0 #895129",
-  },
-  body: {
-    background: "#FFFDD0",
-    padding: "12px",
-    color: "#2a1a0a",
-  },
+  wrap: { overflow:"hidden", boxShadow:"0 4px 16px rgba(0,0,0,0.4)",
+          clipPath:"polygon(3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px),0 3px)" },
+  header: { background:hdrGrad, boxShadow:sideShadow, padding:"9px 12px",
+            display:"flex", alignItems:"center", gap:8 },
+  headerText: { fontSize:12, fontWeight:700, color:"#2a1a0a", fontFamily:"monospace" },
+  body: { background:bodyGrad, boxShadow:sideShadow, padding:"12px", color:"#2a1a0a", fontFamily:"monospace" },
 }
 
 const FLOOR_TILE_DATA = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABJUlEQVR4nNVXyRGDQAwDZkvgSyUpI5WlRr7UQPJaZlF8yObIRD9AMjYyxvSv5+PdGZiXtZvGwaKEeAhVMS+reRzlhRPAarTqWJ6GghlP40BVpfGk8xIqr/d6AJHx2tLQkTJeMxo6gYzXjGbXA61/lpea15Ze47o9EPU8yj88B7J8N4Go59l58DUHJDCzwuIjWn3BTFkPPY4Xp14bWgEGyCAaZ0vg6EzPxinSe6tlbXnPfEMkzq4HpGzRS62ithALeP3UfYD9ElIJYDBrH2B4Gv5rH2B9jmhC+0AbhJ2gnua2fUCbjLftA1WHXGofwGrO4FZQc4Dp7EyPmAlE32/GbwmX7AOSRtMX7bFFZ7qWgPdHtdsH6snMTMcbs3Eu2QciT/Ln+8AHEGJSk+T1pdgAAAAASUVORK5CYII="
-const LUMBERJACK_IMG  = "/assets/Cute_Fantasy/NPCs (Premade)/Lumberjack_Jack.png"
 const PLAYER_IMG      = "/assets/Cute_Fantasy_Free/Player/Player.png"
 const STATUS_COLOR = { focus:"#22c98a", unfocus:"#f06060" }
 const STATUS_LABEL = { focus:"집중",    unfocus:"미집중"   }
@@ -53,6 +53,30 @@ function formatTime(sec) {
   return `${m}:${s}`
 }
 
+// 연속된(인접하거나 겹치는) segment들을 하나로 병합
+// 입력: [{start, end, status}, ...]
+// 출력: [{start, end, status, count}] (count = 합쳐진 분 수)
+function mergeContinuousSegments(segs, gapTolerance = 1) {
+  if (!segs || segs.length === 0) return []
+  // start 기준 정렬
+  const sorted = [...segs].sort((a, b) => a.start - b.start)
+  const merged = []
+  let cur = { ...sorted[0], count: 1 }
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i]
+    // 인접하거나 겹치면 병합 (end ≥ next.start - gapTolerance)
+    if (next.start <= cur.end + gapTolerance) {
+      cur.end = Math.max(cur.end, next.end)
+      cur.count += 1
+    } else {
+      merged.push(cur)
+      cur = { ...next, count: 1 }
+    }
+  }
+  merged.push(cur)
+  return merged
+}
+
 export default function LecturePage() {
   const [sessionId, setSessionId]         = useState(null)
   const [isStarted, setIsStarted]         = useState(false)
@@ -65,7 +89,6 @@ export default function LecturePage() {
     { id:2, title:"퀴즈 1개 풀기",  done:false },
     { id:3, title:"집중도 80점↑",   done:false },
   ])
-  const [petOpen, setPetOpen]             = useState(false)
   const [seekTime, setSeekTime]           = useState(null)
 
   // 강의 선택
@@ -136,12 +159,9 @@ export default function LecturePage() {
   const handleLectureEnd = () => {
     if (!isStarted && !sessionId) return
 
-    // 미집중 구간 → 분 단위 timestamps (LLM 전달용)
-    const focusTimestamps = [...new Set(
-      segments
-        .filter(s => s.status === "unfocus")
-        .map(s => Math.round(s.start / 60))
-    )]
+    // 미집중 구간 → 그룹화 후 각 구간의 시작 분만 LLM에 전달
+    const grouped = mergeContinuousSegments(segments.filter(s => s.status === "unfocus"))
+    const focusTimestamps = grouped.map(g => Math.round(g.start / 60))
 
     endLecture({ session_id: sessionId })
       .then(() => {
@@ -190,52 +210,73 @@ export default function LecturePage() {
 
   const subjects       = [...new Set(lectures.map(l => l.subject))]
   const badSegments    = segments.filter(s => s.status === "unfocus")
+  // 연속된 미집중 구간 그룹화 (인접/겹치는 segment를 하나로 병합)
+  const groupedBadSegments = mergeContinuousSegments(badSegments)
   const completedCount = quests.filter(q => q.done).length
   const showBanner     = seekTo || seekTime !== null
   const bannerTimeStr  = seekTime !== null ? formatTime(seekTime) : seekTo
 
   return (
-    <div style={{ width:"100%", color:"#FFFDD0",
-                  fontFamily:"'Noto Sans KR',sans-serif",
+    <div style={{ width:"100%", height:"100vh", display:"flex", flexDirection:"column",
+                  color:"#2a1a0a", fontFamily:"monospace",
                   backgroundImage:`url(${FLOOR_TILE_DATA})`,
                   backgroundRepeat:"repeat", backgroundSize:"96px 96px",
                   imageRendering:"pixelated" }}>
       {/* SharedHeader */}
       <SharedHeader showHome />
+      <style>{`
+        .lecture-right-panel::-webkit-scrollbar { width: 10px; }
+        .lecture-right-panel::-webkit-scrollbar-track {
+          background: ${BODY_DARK};
+          border-left: 2px solid ${PIX};
+        }
+        .lecture-right-panel::-webkit-scrollbar-thumb {
+          background: ${LIME_DARK};
+          border: 2px solid ${PIX};
+        }
+        .lecture-right-panel::-webkit-scrollbar-thumb:hover {
+          background: ${LIME_MAIN};
+        }
+        /* 우측 패널 안 자식들이 컨텐츠 높이 유지해야 스크롤이 정상 동작 */
+        .lecture-right-panel > * { flex-shrink: 0; }
+      `}</style>
 
       {showBanner && (
-        <div style={{ background:"rgba(245,197,24,0.15)", borderBottom:"1px solid #FFC107",
-                      padding:"8px 20px", fontSize:12, color:"#FFC107",
-                      display:"flex", alignItems:"center", gap:8 }}>
+        <div style={{ background:"rgba(198,228,114,0.12)", borderBottom:`2px solid ${PIX}`,
+                      padding:"8px 20px", fontSize:12, color:"#3a5a10",
+                      display:"flex", alignItems:"center", gap:8, fontFamily:"monospace" }}>
           ▶ <strong>{bannerTimeStr}</strong> 구간으로 이동했습니다.
           {seekTime !== null && (
             <button onClick={() => setSeekTime(null)}
-              style={{ marginLeft:"auto", background:"none", border:"1px solid #FFC107",
-                       borderRadius:5, padding:"2px 8px", color:"#FFC107",
-                       fontSize:11, cursor:"pointer" }}>✕ 닫기</button>
+              style={{ marginLeft:"auto", background:LIME_HI, border:`2px solid ${PIX}`,
+                       padding:"2px 8px", color:"#2a4a08", fontSize:11, cursor:"pointer",
+                       fontFamily:"monospace", clipPath:pixClip }}>✕ 닫기</button>
           )}
         </div>
       )}
 
-      <div style={{ position:"relative", height:`calc(100vh - 60px)`, overflow:"hidden" }}>
+      <div style={{ position:"relative", flex:1, overflow:"hidden" }}>
 
         {/* 왼쪽만 흰 배경 — 오른쪽은 타일 유지 */}
         <div style={{
-          position:"absolute", top:0, bottom:0, left:0, right:286,
+          position:"absolute", top:0, bottom:0, left:0, right:525,
           background:"#ffffff",
           pointerEvents:"none", zIndex:0,
         }} />
 
-        <div style={{ position:"relative", display:"flex", height:"100%", overflow:"hidden", zIndex:1 }}>
+        <div style={{ position:"relative", display:"flex", height:"100%", minHeight:0, overflow:"hidden", zIndex:1 }}>
 
         {/* 왼쪽 */}
-        <div style={{ flex:1, overflowY:"auto", overflowX:"hidden", padding:16 }}>
+        <div style={{ flex:1, overflowY:"hidden", overflowX:"hidden", padding:16, display:"flex", flexDirection:"column" }}>
 
           {/* 드롭박스 + 상태 뱃지 한 행으로 */}
           <div style={{ display:"flex", gap:8, marginBottom:12, alignItems:"stretch" }}>
             <select value={selectedSubject} onChange={e => setSelectedSubject(e.target.value)}
-              style={{ flex:"0 0 140px", background:"#FFFDD0", border:"2px solid #c89100", borderBottom:"3px solid #895129",
-                       borderRadius:6, padding:"8px 12px", color:"#2a1a0a", fontSize:12, cursor:"pointer", outline:"none" }}>
+              style={{ flex:"0 0 140px", background:BODY_MAIN, border:`2px solid ${PIX}`, borderRadius:0,
+                       padding:"8px 12px", color:"#2a1a0a", fontSize:12, cursor:"pointer", outline:"none",
+                       fontFamily:"monospace",
+                       boxShadow:`inset 0 2px 0 ${BODY_HI}, inset 0 -2px 0 ${BODY_DARK}`,
+                       clipPath:pixClip }}>
               <option value="">📚 과목 선택</option>
               {subjects.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
@@ -245,10 +286,13 @@ export default function LecturePage() {
                 if (lec) handleLectureSelect(lec)
               }}
               disabled={!selectedSubject}
-              style={{ flex:"0 0 240px", background:"#FFFDD0", border:"2px solid #c89100", borderBottom:"3px solid #895129",
-                       borderRadius:6, padding:"8px 12px", color: selectedSubject ? "#2a1a0a" : "#a86838",
+              style={{ flex:"0 0 240px", background:BODY_MAIN, border:`2px solid ${PIX}`, borderRadius:0,
+                       padding:"8px 12px", color: selectedSubject ? "#2a1a0a" : LIME_DARK,
                        fontSize:12, cursor: selectedSubject ? "pointer" : "not-allowed",
-                       outline:"none", opacity: selectedSubject ? 1 : 0.5 }}>
+                       outline:"none", opacity: selectedSubject ? 1 : 0.5,
+                       fontFamily:"monospace",
+                       boxShadow:`inset 0 2px 0 ${BODY_HI}, inset 0 -2px 0 ${BODY_DARK}`,
+                       clipPath:pixClip }}>
               <option value="">🎬 강의 선택</option>
               {filteredLectures.map(l => (
                 <option key={l.id} value={l.id}>{l.title} ({Math.floor(l.duration_sec/60)}분)</option>
@@ -256,23 +300,24 @@ export default function LecturePage() {
             </select>
 
             {selectedLecture && (
-              <div style={{ flex:1, padding:"6px 12px", background:"#fff4a0",
-                            border:"2px solid #c89100", borderRadius:6, fontSize:11, color:"#6b3d1f",
-                            display:"flex", alignItems:"center", gap:8, minWidth:0 }}>
+              <div style={{ flex:1, padding:"6px 12px", background:LIME_HI,
+                            border:`2px solid ${PIX}`,
+                            fontSize:11, color:"#2a4a08", display:"flex", alignItems:"center", gap:8, minWidth:0,
+                            fontFamily:"monospace", clipPath:pixClip }}>
                 <span style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0 }}>
                   📖 {selectedLecture.subject} · {selectedLecture.title}
                 </span>
                 {isStarted
-                  ? <span style={{ color:"#22c98a", fontWeight:700, marginLeft:"auto", flexShrink:0 }}>● 수강 중</span>
-                  : <span style={{ color:"#c89100", marginLeft:"auto", flexShrink:0 }}>강의를 선택해주세요</span>}
+                  ? <span style={{ color:LIME_DARK, fontWeight:700, marginLeft:"auto", flexShrink:0 }}>● 수강 중</span>
+                  : <span style={{ color:"#3a5a10", marginLeft:"auto", flexShrink:0 }}>강의를 선택해주세요</span>}
               </div>
             )}
           </div>
 
           {/* 영상 */}
-          <div style={{ ...PANEL.wrap, position:"relative", marginBottom:12 }}>
+          <div style={{ ...PANEL.wrap, position:"relative", marginBottom:12, flex:"0 0 auto", maxHeight:"55%", display:"flex", flexDirection:"column" }}>
             <video ref={videoRef} src={selectedLecture?.video_url || "/test.webm"} controls
-              style={{ width:"100%", borderRadius:10 }}
+              style={{ width:"100%", flex:1, minHeight:0, objectFit:"contain" }}
               onLoadedMetadata={() => {
                 if (videoRef.current) setVideoDuration(Math.floor(videoRef.current.duration))
               }}
@@ -286,40 +331,43 @@ export default function LecturePage() {
               }} />
 
             {seekTime !== null && (
-              <div style={{ position:"absolute", top:12, left:12, background:"rgba(245,197,24,0.18)",
-                            border:"1px solid #FFC107", borderRadius:7, padding:"4px 10px",
-                            fontSize:11, color:"#FFC107", fontWeight:700 }}>
+              <div style={{ position:"absolute", top:12, left:12, background:"rgba(198,228,114,0.2)",
+                            border:`2px solid ${PIX}`, padding:"4px 10px",
+                            fontSize:11, color:"#3a5a10", fontWeight:700, fontFamily:"monospace",
+                            clipPath:pixClip }}>
                 ▶ {formatTime(seekTime)} 구간 재생중
               </div>
             )}
             {isStarted && (
               <button onClick={handleLectureEnd}
                 style={{ position:"absolute", bottom:12, right:12,
-                          background:"linear-gradient(180deg,#c89100,#895129)",
-                          border:"2px solid #c89100", borderBottom:"4px solid #895129",
-                          borderRadius:6, padding:"5px 14px", color:"#FFFDD0",
-                          fontSize:11, fontWeight:700, cursor:"pointer",
-                          textShadow:"1px 1px 0 #895129" }}>
+                          background:LIME_MAIN, border:`2px solid ${PIX}`,
+                          borderBottom:`4px solid ${PIX}`,
+                          boxShadow:`inset 0 2px 0 ${LIME_HI}`,
+                          padding:"5px 14px", color:"#2a1a0a",
+                          fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"monospace",
+                          clipPath:pixClip }}>
                 강의 종료 →
               </button>
             )}
           </div>
 
           {/* 실시간 타임라인 */}
-          <div style={{ ...PANEL.wrap, marginBottom:12 }}>
+          <div style={{ ...PANEL.wrap, flex:1, minHeight:0, overflowY:"auto", marginBottom:0 }}>
             <div style={PANEL.header}>
               <span style={PANEL.headerText}>📊 집중도 타임라인</span>
               {videoDuration > 0 && (
-                <span style={{ marginLeft:"auto", fontSize:10, color:"#F9E076" }}>
+                <span style={{ marginLeft:"auto", fontSize:10, color:"#2a4a08", fontFamily:"monospace" }}>
                   {formatTime(currentVideoTime)} / {formatTime(videoDuration)}
                 </span>
               )}
             </div>
             <div style={{ ...PANEL.body, padding:14 }}>
             {videoDuration === 0 ? (
-              <div style={{ height:60, background:"#F9E076", border:"1px solid #c89100", borderRadius:6,
+              <div style={{ height:60, background:LIME_HI, border:`2px solid ${PIX}`,
                             display:"flex", alignItems:"center", justifyContent:"center",
-                            fontSize:10, color:"#c89100" }}>
+                            fontSize:10, color:"#3a5a10", fontFamily:"monospace",
+                            clipPath:pixClip }}>
                 강의를 선택하면 타임라인이 표시돼요
               </div>
             ) : (
@@ -337,39 +385,48 @@ export default function LecturePage() {
               {Object.entries(STATUS_COLOR).map(([k,v]) => (
                 <div key={k} style={{ display:"flex", alignItems:"center", gap:4, fontSize:11 }}>
                   <div style={{ width:10, height:10, borderRadius:2, background:v }} />
-                  <span style={{ color:"#6b3d1f" }}>{STATUS_LABEL[k]}</span>
+                  <span style={{ color:"#3a5a10", fontFamily:"monospace" }}>{STATUS_LABEL[k]}</span>
                 </div>
               ))}
             </div>
 
-            <div style={{ fontSize:11, color:"#895129", fontWeight:700, marginBottom:8 }}>
+            <div style={{ fontSize:11, color:"#3a5a10", fontWeight:700, marginBottom:8, fontFamily:"monospace" }}>
               📌 미집중 구간 다시보기
             </div>
-            {badSegments.length === 0 ? (
-              <div style={{ fontSize:11, color:"#c89100" }}>
+            {groupedBadSegments.length === 0 ? (
+              <div style={{ fontSize:11, color:"#3a5a10", fontFamily:"monospace" }}>
                 {isStarted ? "미집중 구간이 없어요 🎉" : "강의 수강 중 1분마다 업데이트돼요"}
               </div>
-            ) : badSegments.slice(-5).map((seg, i) => {
+            ) : groupedBadSegments.slice(-5).map((seg, i) => {
               const startMin = Math.floor(seg.start / 60)
               const endMin   = Math.ceil(seg.end / 60)
+              const durMin   = endMin - startMin
               return (
                 <div key={i} style={{ display:"flex", justifyContent:"space-between",
                                       alignItems:"center", padding:"8px 10px", marginBottom:6,
-                                      borderRadius:6, background:"#fff4a0",
-                                      border:"1px solid #c89100" }}>
+                                      background:LIME_HI, border:`2px solid ${PIX}`,
+                                      boxShadow:sideShadow, clipPath:pixClip }}>
                   <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                     <div style={{ width:8, height:8, borderRadius:"50%", background:STATUS_COLOR.unfocus }} />
-                    <span style={{ fontSize:11, color:"#895129", fontWeight:700 }}>미집중</span>
-                    <span style={{ fontSize:11, color:"#6b3d1f" }}>
+                    <span style={{ fontSize:11, color:"#3a5a10", fontWeight:700, fontFamily:"monospace" }}>미집중</span>
+                    <span style={{ fontSize:11, color:"#2a4a08", fontFamily:"monospace" }}>
                       {startMin}분 ~ {endMin}분
                     </span>
+                    {durMin >= 2 && (
+                      <span style={{ fontSize:9, color:"#2a4a08", background:LIME_MAIN,
+                                     border:`2px solid ${PIX}`, padding:"1px 5px", fontWeight:700,
+                                     fontFamily:"monospace", clipPath:pixClip }}>
+                        {durMin}분 연속
+                      </span>
+                    )}
                   </div>
                   <button onClick={() => setSeekTime(seg.start)}
-                    style={{ background: seekTime===seg.start ? "linear-gradient(180deg,#FFC107,#c89100)" : "linear-gradient(180deg,#c89100,#895129)",
-                             border: seekTime===seg.start ? "2px solid #F9E076" : "2px solid #c89100",
-                             borderBottom: "3px solid #895129",
-                             borderRadius:5, padding:"4px 12px", fontSize:11,
-                             color:"#FFFDD0", fontWeight:700, cursor:"pointer" }}>
+                    style={{ background: seekTime===seg.start ? LIME_HI : LIME_MAIN,
+                             border:`2px solid ${PIX}`,
+                             borderBottom: seekTime===seg.start ? `2px solid ${PIX}` : `4px solid ${PIX}`,
+                             boxShadow: seekTime===seg.start ? "none" : `inset 0 2px 0 ${LIME_HI}`,
+                             padding:"4px 12px", fontSize:11, color:"#2a4a08", fontWeight:700,
+                             cursor:"pointer", fontFamily:"monospace", clipPath:pixClip }}>
                     {seekTime===seg.start ? "▶ 재생중" : "▶ 다시보기"}
                   </button>
                 </div>
@@ -380,8 +437,12 @@ export default function LecturePage() {
         </div>{/* 왼쪽 컬럼 */}
 
         {/* 오른쪽 */}
-        <div style={{ width:286, display:"flex", flexDirection:"column",
-                      gap:10, padding:"12px 12px 12px 12px", overflowY:"auto", overflowX:"hidden", flexShrink:0 }}>
+        <div className="lecture-right-panel"
+             style={{ width:500, display:"flex", flexDirection:"column",
+                      gap:10, padding:"12px",
+                      overflowY:"scroll", overflowX:"hidden",
+                      flexShrink:0, minHeight:0,
+                      height:"100%", maxHeight:"100%" }}>
           <WebcamPanel
             focusScore={focusScore} setFocusScore={setFocusScore}
             sessionId={sessionId} isStarted={isStarted}
@@ -402,9 +463,11 @@ export default function LecturePage() {
             }}
           />
 
+          {/* 적응형 뽀모도로 타이머 */}
+          <PomodoroPanel focusScores={focusScores} isStarted={isStarted} />
 
           {/* 퀘스트 */}
-          <div style={{ ...PANEL.wrap }}>
+          <div style={{ ...PANEL.wrap, flexShrink:0 }}>
             <div style={PANEL.header}>
               <div style={{ width:28, height:28, flexShrink:0,
                             backgroundImage:`url(${PLAYER_IMG})`,
@@ -413,23 +476,25 @@ export default function LecturePage() {
                             backgroundPosition:"0px 0px",
                             imageRendering:"pixelated" }} />
               <span style={PANEL.headerText}>퀘스트 현황</span>
-              <div style={{ marginLeft:"auto", background:"#895129", border:"2px solid #6b3d1f",
-                            borderRadius:4, padding:"1px 8px",
-                            fontSize:11, fontWeight:700, color:"#F9E076" }}>
+              <div style={{ marginLeft:"auto", background:LIME_DARK, border:`2px solid ${PIX}`,
+                            padding:"1px 8px",
+                            fontSize:11, fontWeight:700, color:"#2a1a0a",
+                            fontFamily:"monospace", clipPath:pixClip }}>
                 {completedCount}/{quests.length}
               </div>
             </div>
             <div style={{ ...PANEL.body }}>
             {quests.map(q => (
               <div key={q.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center",
-                                       fontSize:11, padding:"6px 0", borderBottom:"1px solid #e8c550" }}>
-                <span style={{ color: q.done ? "#c89100" : "#2a1a0a", textDecoration: q.done ? "line-through" : "none" }}>
+                                       fontSize:11, padding:"6px 0", borderBottom:`2px solid ${LIME_HI}` }}>
+                <span style={{ color: q.done ? LIME_DARK : "#2a1a0a", textDecoration: q.done ? "line-through" : "none",
+                               fontFamily:"monospace" }}>
                   {q.title}
                 </span>
-                <span style={{ color: q.done ? "#c89100" : "#895129", fontWeight:700,
-                               fontSize:10, background: q.done ? "#fff4a0" : "#F9E076",
-                               border:`1px solid ${q.done ? "#c89100" : "#895129"}`,
-                               borderRadius:3, padding:"1px 6px" }}>
+                <span style={{ color:"#2a4a08", fontWeight:700,
+                               fontSize:10, background: q.done ? LIME_HI : BODY_MAIN,
+                               border:`2px solid ${PIX}`,
+                               padding:"1px 6px", fontFamily:"monospace", clipPath:pixClip }}>
                   {q.done ? "완료" : "진행중"}
                 </span>
               </div>
@@ -439,9 +504,6 @@ export default function LecturePage() {
         </div>
         </div>{/* flex wrapper */}
       </div>{/* relative outer */}
-
-      <PetCharFixed onOpen={() => setPetOpen(true)} />
-      {petOpen && <PetPopup onClose={() => setPetOpen(false)} sessionId={sessionId} />}
 
       {quizPopupOpen && (
         <QuizAfterLecture onClose={() => setQuizPopupOpen(false)}
@@ -526,11 +588,11 @@ function FocusTimeline({ segments, focusScores, videoDuration, currentVideoTime,
         {yTicks.map(t => (
           <g key={t}>
             <line x1={PAD.left} y1={toY(t)} x2={PAD.left + innerW} y2={toY(t)}
-              stroke={t === 70 ? "#c89100" : "#e8c55055"}
+              stroke={t === 70 ? LIME_DARK : LIME_HI + "55"}
               strokeWidth={t === 70 ? 1 : 0.5}
               strokeDasharray={t === 70 ? "4,3" : "0"} />
             <text x={PAD.left - 4} y={toY(t) + 3.5}
-              textAnchor="end" fontSize="8" fill="#c89100">{t}</text>
+              textAnchor="end" fontSize="8" fill="#3a5a10">{t}</text>
           </g>
         ))}
 
@@ -539,18 +601,18 @@ function FocusTimeline({ segments, focusScores, videoDuration, currentVideoTime,
           <g key={m}>
             <line x1={toX(m*60)} y1={PAD.top + innerH}
               x2={toX(m*60)} y2={PAD.top + innerH + 3}
-              stroke="#e8c550" strokeWidth="0.5" />
+              stroke={LIME_HI} strokeWidth="0.5" />
             <text x={toX(m*60)} y={PAD.top + innerH + 11}
-              textAnchor="middle" fontSize="8" fill="#c89100">{m}분</text>
+              textAnchor="middle" fontSize="8" fill="#3a5a10">{m}분</text>
           </g>
         ))}
 
         {/* 축 테두리 */}
         <line x1={PAD.left} y1={PAD.top} x2={PAD.left} y2={PAD.top + innerH}
-          stroke="#c89100" strokeWidth="1" />
+          stroke={LIME_DARK} strokeWidth="1" />
         <line x1={PAD.left} y1={PAD.top + innerH}
           x2={PAD.left + innerW} y2={PAD.top + innerH}
-          stroke="#c89100" strokeWidth="1" />
+          stroke={LIME_DARK} strokeWidth="1" />
 
         {/* 집중도 라인 — 영역 채우기 + 선 */}
         {linePath && (
@@ -560,7 +622,7 @@ function FocusTimeline({ segments, focusScores, videoDuration, currentVideoTime,
               d={linePath + ` L ${ptsUniq[ptsUniq.length-1].x.toFixed(1)},${(PAD.top+innerH).toFixed(1)} L ${ptsUniq[0].x.toFixed(1)},${(PAD.top+innerH).toFixed(1)} Z`}
               fill="url(#focusGrad)" opacity="0.35" />
             {/* 선 */}
-            <path d={linePath} fill="none" stroke="#c89100"
+            <path d={linePath} fill="none" stroke={LIME_DARK}
               strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
           </>
         )}
@@ -568,8 +630,8 @@ function FocusTimeline({ segments, focusScores, videoDuration, currentVideoTime,
         {/* 그라데이션 정의 */}
         <defs>
           <linearGradient id="focusGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#c89100" stopOpacity="0.8"/>
-            <stop offset="100%" stopColor="#FFC107" stopOpacity="0.1"/>
+            <stop offset="0%" stopColor={LIME_MAIN} stopOpacity="0.8"/>
+            <stop offset="100%" stopColor={LIME_HI} stopOpacity="0.1"/>
           </linearGradient>
         </defs>
 
@@ -578,7 +640,7 @@ function FocusTimeline({ segments, focusScores, videoDuration, currentVideoTime,
           <g key={i}>
             <circle cx={p.x} cy={p.y} r="4"
               fill={p.score >= 70 ? "#22c98a" : "#f06060"}
-              stroke="#FFFDD0" strokeWidth="1.5" />
+              stroke={BODY_HI} strokeWidth="1.5" />
             <title>{Math.round(p.sec/60)}분: {p.score}점</title>
           </g>
         ))}
@@ -586,7 +648,7 @@ function FocusTimeline({ segments, focusScores, videoDuration, currentVideoTime,
         {/* 현재 재생 위치 커서 */}
         {cursorX && (
           <line x1={cursorX} y1={PAD.top} x2={cursorX} y2={PAD.top + innerH}
-            stroke="#c89100" strokeWidth="1.5" opacity="0.8"
+            stroke={LIME_DARK} strokeWidth="1.5" opacity="0.8"
             strokeDasharray="3,2" />
         )}
 
@@ -594,11 +656,71 @@ function FocusTimeline({ segments, focusScores, videoDuration, currentVideoTime,
 
       {/* 데이터 없을 때 안내 */}
       {focusScores.length === 0 && (
-        <div style={{ textAlign:"center", fontSize:10, color:"#c89100", marginTop:4 }}>
+        <div style={{ textAlign:"center", fontSize:10, color:"#3a5a10", marginTop:4, fontFamily:"monospace" }}>
           수강 시작 후 1분마다 집중도 포인트가 표시돼요
         </div>
       )}
     </div>
+  )
+}
+
+// ── 실시간 집중도 라인차트 (최근 60초, 1초 단위) ──
+function LiveFocusChart({ scores, threshold = 70 }) {
+  const W = 240, H = 50
+  const PAD = { top:4, right:4, bottom:4, left:4 }
+  const innerW = W - PAD.left - PAD.right
+  const innerH = H - PAD.top - PAD.bottom
+
+  // 60개 슬롯 기준 (오른쪽이 가장 최근)
+  const N = 60
+  const startIdx = Math.max(0, N - scores.length)
+
+  const toX = (i) => PAD.left + (i / (N - 1)) * innerW
+  const toY = (s) => PAD.top + innerH - (s / 100) * innerH
+  const yThreshold = toY(threshold)
+
+  // 패스 생성
+  const pts = scores.map((p, i) => ({ x: toX(startIdx + i), y: toY(p.score), score: p.score }))
+  const linePath = pts.length > 1
+    ? "M " + pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" L ")
+    : ""
+
+  // 영역 채우기 (라인 아래)
+  const areaPath = pts.length > 1
+    ? linePath + ` L ${pts[pts.length-1].x.toFixed(1)},${(PAD.top + innerH).toFixed(1)}`
+                + ` L ${pts[0].x.toFixed(1)},${(PAD.top + innerH).toFixed(1)} Z`
+    : ""
+
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none"
+         style={{ display:"block", background:BODY_MAIN, borderRadius:0 }}>
+      {/* 격자 */}
+      <line x1={PAD.left} y1={toY(100)} x2={W-PAD.right} y2={toY(100)} stroke={LIME_HI} strokeWidth="0.5" />
+      <line x1={PAD.left} y1={toY(50)}  x2={W-PAD.right} y2={toY(50)}  stroke={LIME_HI} strokeWidth="0.5" strokeDasharray="2,2" />
+      <line x1={PAD.left} y1={toY(0)}   x2={W-PAD.right} y2={toY(0)}   stroke={LIME_HI} strokeWidth="0.5" />
+
+      {/* 임계선 */}
+      <line x1={PAD.left} y1={yThreshold} x2={W-PAD.right} y2={yThreshold}
+            stroke={LIME_DARK} strokeWidth="0.6" strokeDasharray="3,2" opacity="0.7" />
+
+      {/* 영역 */}
+      {areaPath && <path d={areaPath} fill={LIME_MAIN} opacity="0.18" />}
+
+      {/* 라인 */}
+      {linePath && <path d={linePath} fill="none" stroke={LIME_DARK} strokeWidth="1.5"
+                          strokeLinejoin="round" strokeLinecap="round" />}
+
+      {/* 가장 최근 점 강조 */}
+      {pts.length > 0 && (() => {
+        const last = pts[pts.length - 1]
+        const isHigh = last.score >= threshold
+        return (
+          <circle cx={last.x} cy={last.y} r="2.5"
+                  fill={isHigh ? LIME_DARK : "#e43b44"}
+                  stroke={BODY_HI} strokeWidth="1" />
+        )
+      })()}
+    </svg>
   )
 }
 
@@ -612,6 +734,8 @@ function WebcamPanel({ focusScore, setFocusScore, sessionId, isStarted,
   const [isWriting, setIsWriting]   = useState(false)
   const [loading, setLoading]       = useState(false)
   const [tickCount, setTickCount]   = useState(0)
+  const [liveScores, setLiveScores] = useState([])  // 1초마다 받는 실시간 점수 [{t, score}] (최근 60초만 유지)
+  const [currentScore, setCurrentScore] = useState(0)  // 가장 최근 1초 점수
 
   const tickBufferRef  = useRef([])
   const tickCountRef   = useRef(0)
@@ -697,6 +821,14 @@ function WebcamPanel({ focusScore, setFocusScore, sessionId, isStarted,
           lectureVideoRef.current.playbackRate = data.suggested_playback_rate ?? 1.0
         if (setPlaybackRate) setPlaybackRate(data.suggested_playback_rate ?? 1.0)
 
+        // 실시간 1초 점수 차트용 (최근 60초만 유지)
+        const liveScore = Math.round((data.focus_score ?? 0) * 100)
+        setCurrentScore(liveScore)
+        setLiveScores(prev => {
+          const next = [...prev, { t: Date.now(), score: liveScore }]
+          return next.length > 60 ? next.slice(-60) : next
+        })
+
         // 버퍼에 label 추가
         const rawLabel = data.label === "focused" ? "focused" : "unfocused"
         tickBufferRef.current.push(rawLabel)
@@ -728,6 +860,16 @@ function WebcamPanel({ focusScore, setFocusScore, sessionId, isStarted,
         const dummyLabel = Math.random() > (1 - FOCUS_THRESHOLD / 100) ? "focused" : "unfocused"
         tickBufferRef.current.push(dummyLabel)
 
+        // 더미 모드에서도 실시간 1초 점수 차트 갱신
+        const dummyLiveScore = dummyLabel === "focused"
+          ? 70 + Math.floor(Math.random() * 30)
+          : Math.floor(Math.random() * 60)
+        setCurrentScore(dummyLiveScore)
+        setLiveScores(prev => {
+          const next = [...prev, { t: Date.now(), score: dummyLiveScore }]
+          return next.length > 60 ? next.slice(-60) : next
+        })
+
         if (elapsed >= 60000) {
           const buf      = tickBufferRef.current
           const dummyPct = Math.round(buf.filter(l => l === "focused").length / buf.length * 100)
@@ -754,6 +896,7 @@ function WebcamPanel({ focusScore, setFocusScore, sessionId, isStarted,
   function stopWebcam() {
     clearInterval(intervalRef.current); intervalRef.current = null
     tickBufferRef.current = []; tickCountRef.current = 0; setTickCount(0)
+    setLiveScores([]); setCurrentScore(0)
     if (webcamVideoRef.current?.srcObject) {
       webcamVideoRef.current.srcObject.getTracks().forEach(t => t.stop())
       webcamVideoRef.current.srcObject = null
@@ -769,7 +912,7 @@ function WebcamPanel({ focusScore, setFocusScore, sessionId, isStarted,
       webcamVideoRef.current.srcObject.getTracks().forEach(t => t.stop())
   }, [])
 
-  const curColor = COLOR[focusLabel] ?? "#FFC107"
+  const curColor = COLOR[focusLabel] ?? LIME_DARK
   const curLabel = LABEL[focusLabel] ?? "집중 중"
 
   return (
@@ -780,75 +923,99 @@ function WebcamPanel({ focusScore, setFocusScore, sessionId, isStarted,
         <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6, fontSize:10 }}>
           {/* 배속 표시 */}
           {cvActive && (
-            <span style={{ background:"rgba(0,0,0,0.4)", borderRadius:4,
-                           padding:"1px 6px", color:"#FFC107", fontWeight:700, fontSize:10 }}>
+            <span style={{ background:PIX, borderRadius:0,
+                           padding:"1px 6px", color:LIME_HI, fontWeight:700, fontSize:10,
+                           fontFamily:"monospace" }}>
               {lectureVideoRef?.current?.playbackRate?.toFixed(1) ?? "1.0"}x
             </span>
           )}
           {loading ? (
-            <span style={{ color:"#F9E076" }}>⏳ 연결 중...</span>
+            <span style={{ color:LIME_MAIN, fontFamily:"monospace" }}>⏳ 연결 중...</span>
           ) : cvActive && intervalRef.current ? (
             <>
               <div style={{ width:6, height:6, borderRadius:"50%", background:"#f06060",
                             animation:"pulse 1.5s infinite" }} />
-              <span style={{ color:"#f06060", fontWeight:700 }}>측정 중</span>
-              {isWriting && <span style={{ color:"#F9E076" }}>✏️</span>}
+              <span style={{ color:"#f06060", fontWeight:700, fontFamily:"monospace" }}>측정 중</span>
+              {isWriting && <span style={{ color:LIME_MAIN, fontFamily:"monospace" }}>✏️</span>}
             </>
           ) : cvActive ? (
-            <span style={{ color:"#FFC107" }}>⏸ 일시정지</span>
+            <span style={{ color:LIME_MAIN, fontFamily:"monospace" }}>⏸ 일시정지</span>
           ) : (
-            <span style={{ color:"#c89100", fontWeight:700 }}>대기 중</span>
+            <span style={{ color:LIME_DARK, fontWeight:700, fontFamily:"monospace" }}>대기 중</span>
           )}
         </div>
       </div>
       <div style={{ ...PANEL.body, padding:"10px" }}>
       {/* 웹캠 화면 */}
       <canvas ref={canvasRef} style={{ display:"none" }} />
-      <div style={{ position:"relative", borderRadius:8, overflow:"hidden",
-                    background:"#2a1a0a", height:160, flexShrink:0 }}>
+      <div style={{ position:"relative", overflow:"hidden",
+                    background:"#2a1a0a", height:300, flexShrink:0 }}>
         <video ref={webcamVideoRef} autoPlay muted
-          style={{ width:"100%", height:"100%", borderRadius:8,
+          style={{ width:"100%", height:"100%",
                    display: cvActive ? "block" : "none",
                    objectFit:"cover" }} />
         {!cvActive && !loading && (
           <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column",
-                        alignItems:"center", justifyContent:"center", color:"#c89100" }}>
+                        alignItems:"center", justifyContent:"center", color:LIME_DARK }}>
             <div style={{ fontSize:32 }}>📷</div>
-            <div style={{ fontSize:10, color:"#c89100", marginTop:4 }}>영상 재생 시 자동 시작</div>
+            <div style={{ fontSize:10, color:LIME_DARK, marginTop:4, fontFamily:"monospace" }}>영상 재생 시 자동 시작</div>
           </div>
         )}
         {loading && (
           <div style={{ position:"absolute", inset:0, display:"flex", flexDirection:"column",
-                        alignItems:"center", justifyContent:"center", color:"#c89100" }}>
+                        alignItems:"center", justifyContent:"center", color:LIME_DARK }}>
             <div style={{ fontSize:20 }}>⏳</div>
-            <div style={{ fontSize:10, color:"#c89100", marginTop:4 }}>웹캠 연결 중...</div>
+            <div style={{ fontSize:10, color:LIME_DARK, marginTop:4, fontFamily:"monospace" }}>웹캠 연결 중...</div>
           </div>
         )}
         {isWriting && cvActive && (
-          <div style={{ position:"absolute", top:6, right:6, background:"rgba(124,111,247,0.85)",
-                        borderRadius:5, padding:"2px 8px", fontSize:9, color:"#FFFDD0", fontWeight:700 }}>
+          <div style={{ position:"absolute", top:6, right:6, background:PIX,
+                        border:`2px solid ${LIME_DARK}`,
+                        padding:"2px 8px", fontSize:9, color:LIME_HI, fontWeight:700,
+                        fontFamily:"monospace" }}>
             ✏️ 필기 중
           </div>
         )}
       </div>
 
+      {/* 실시간 집중도 차트 (1초마다 업데이트, 최근 60초) */}
+      {cvActive && (
+        <div style={{ marginTop:10, padding:"8px 10px", background:LIME_HI,
+                      border:`2px solid ${PIX}`, clipPath:pixClip }}>
+          <div style={{ display:"flex", justifyContent:"space-between",
+                        alignItems:"center", marginBottom:4 }}>
+            <span style={{ fontSize:10, color:"#3a5a10", fontWeight:700, fontFamily:"monospace" }}>📈 실시간 집중도</span>
+            <span style={{ fontSize:14, fontWeight:700,
+                            color: currentScore >= FOCUS_THRESHOLD ? "#22c98a" : "#f06060" }}>
+              {currentScore}점
+            </span>
+          </div>
+          <LiveFocusChart scores={liveScores} threshold={FOCUS_THRESHOLD} />
+          <div style={{ display:"flex", justifyContent:"space-between",
+                        fontSize:8, color:"#3a5a10", marginTop:2, fontFamily:"monospace" }}>
+            <span>-60초</span>
+            <span>지금</span>
+          </div>
+        </div>
+      )}
+
       {/* 1분 집계 진행 바 */}
       {cvActive && (
         <div style={{ marginTop:8 }}>
           <div style={{ display:"flex", justifyContent:"space-between",
-                        fontSize:9, color:"#c89100", marginBottom:3 }}>
+                        fontSize:9, color:LIME_DARK, marginBottom:3, fontFamily:"monospace" }}>
             <span>1분 집계</span>
             <span>{tickCount}/60초</span>
           </div>
-          <div style={{ height:3, background:"#e8c550", borderRadius:2, overflow:"hidden" }}>
+          <div style={{ height:3, background:LIME_HI, borderRadius:0, overflow:"hidden" }}>
             <div style={{ width:`${(tickCount/60)*100}%`, height:"100%",
-                          background:"#c89100", borderRadius:2,
+                          background:LIME_DARK,
                           transition:"width 1s linear" }} />
           </div>
           {focusScore > 0 && (
             <div style={{ marginTop:6, display:"flex", justifyContent:"space-between",
                           alignItems:"center" }}>
-              <span style={{ fontSize:10, color:"#c89100" }}>최근 1분</span>
+              <span style={{ fontSize:10, color:LIME_DARK, fontFamily:"monospace" }}>최근 1분</span>
               <span style={{ fontSize:13, fontWeight:700, color: curColor }}>
                 {focusScore}점
               </span>
@@ -860,15 +1027,308 @@ function WebcamPanel({ focusScore, setFocusScore, sessionId, isStarted,
 
       <button onClick={cvActive ? stopWebcam : startWebcam} disabled={loading}
         style={{ width:"100%", marginTop:8, padding:"6px 0",
-                 background: loading ? "#6b3d1f" : cvActive ? "linear-gradient(180deg,#c42f1c,#9c1c0b)" : "linear-gradient(180deg,#c89100,#895129)",
-                 border:"2px solid #c89100", borderBottom:"3px solid #895129",
-                 borderRadius:6, color:"#FFFDD0", fontWeight:700,
-                 cursor: loading ? "not-allowed" : "pointer", fontSize:12, opacity: loading ? 0.7 : 1 }}>
+                 background: loading ? "#c0cbdc" : cvActive ? "#e43b44" : LIME_MAIN,
+                 border:`2px solid ${PIX}`, borderBottom:`4px solid ${PIX}`,
+                 boxShadow:`inset 0 2px 0 ${loading?"#ffffff":cvActive?"#ee686e":LIME_HI}`,
+                 color: loading ? "#8b9bb4" : cvActive ? "#FFFDD0" : "#2a1a0a",
+                 fontWeight:700, cursor:loading?"not-allowed":"pointer", fontSize:12,
+                 fontFamily:"monospace", clipPath:pixClip, opacity:loading?0.7:1 }}>
         {loading ? "연결 중..." : cvActive ? "⏹ 끄기" : "▶ 켜기"}
       </button>
       </div>{/* PANEL.body */}
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}`}</style>
     </div>
+  )
+}
+
+// ── 적응형 뽀모도로 타이머 ──
+// 분당 점수(focusScores)를 기반으로 동작:
+//  - 10분 연속 미집중(< FOCUS_THRESHOLD) → 자동으로 휴식 모드 전환
+//  - 10분 연속 집중(>= FOCUS_THRESHOLD) → 집중 시간 자동 5분 연장 (1회당 1번)
+//  - on/off 토글
+//  - 오늘의 뽀모도로 횟수 (localStorage에 저장, 자정 리셋)
+function PomodoroPanel({ focusScores, isStarted }) {
+  const FOCUS_DURATION_DEFAULT = 25 * 60   // 25분
+  const BREAK_DURATION         = 5  * 60   // 5분
+  const STREAK_THRESHOLD       = 10        // 연속 10분 기준
+  const EXTEND_BY              = 5  * 60   // 연장 5분
+
+  const [enabled, setEnabled]               = useState(true)
+  const [mode, setMode]                     = useState("focus")  // "focus" | "break"
+  const [secondsLeft, setSecondsLeft]       = useState(FOCUS_DURATION_DEFAULT)
+  const [running, setRunning]               = useState(false)
+  const [todayCount, setTodayCount]         = useState(0)
+  const [extendCount, setExtendCount]       = useState(0)  // 현재 사이클에서 연장 횟수
+  const [autoEvent, setAutoEvent]           = useState("") // 최근 자동 동작 표시
+  const lastProcessedMinuteRef              = useRef(-1)
+  const extendedAtRef                       = useRef(new Set())  // 어떤 minute에서 연장했는지 (중복 방지)
+
+  // 오늘 횟수 로드 (localStorage, 날짜별)
+  useEffect(() => {
+    const key = `pomodoro_${new Date().toISOString().slice(0,10)}`
+    const saved = parseInt(localStorage.getItem(key) || "0", 10)
+    setTodayCount(saved)
+  }, [])
+
+  // 횟수 증가 → localStorage 저장
+  function incrementTodayCount() {
+    const key = `pomodoro_${new Date().toISOString().slice(0,10)}`
+    setTodayCount(prev => {
+      const next = prev + 1
+      localStorage.setItem(key, String(next))
+      return next
+    })
+  }
+
+  // 강의 시작 → 자동으로 타이머 시작
+  useEffect(() => {
+    if (enabled && isStarted && !running && secondsLeft > 0) {
+      setRunning(true)
+    }
+  }, [isStarted, enabled])
+
+  // 1초 카운트다운
+  useEffect(() => {
+    if (!enabled || !running) return
+    const t = setInterval(() => {
+      setSecondsLeft(prev => {
+        if (prev <= 1) {
+          // 시간 끝 → 모드 전환
+          if (mode === "focus") {
+            incrementTodayCount()
+            setMode("break")
+            setExtendCount(0)
+            extendedAtRef.current = new Set()
+            setAutoEvent("⏸ 휴식 시작")
+            return BREAK_DURATION
+          } else {
+            setMode("focus")
+            setAutoEvent("▶ 집중 시간 시작")
+            return FOCUS_DURATION_DEFAULT
+          }
+        }
+        return prev - 1
+      })
+    }, 1000)
+    return () => clearInterval(t)
+  }, [enabled, running, mode])
+
+  // 분당 점수 변화 감지 → 적응형 동작
+  useEffect(() => {
+    if (!enabled || focusScores.length === 0) return
+    const latest = focusScores[focusScores.length - 1]
+    if (latest.minute === lastProcessedMinuteRef.current) return
+    lastProcessedMinuteRef.current = latest.minute
+
+    // 최근 STREAK_THRESHOLD분 추출
+    if (focusScores.length < STREAK_THRESHOLD) return
+    const recent = focusScores.slice(-STREAK_THRESHOLD)
+    const allUnfocus = recent.every(s => s.score < FOCUS_THRESHOLD)
+    const allFocus   = recent.every(s => s.score >= FOCUS_THRESHOLD)
+
+    // 10분 연속 미집중 → 휴식 자동 전환 (focus 모드일 때만)
+    if (allUnfocus && mode === "focus" && running) {
+      setMode("break")
+      setSecondsLeft(BREAK_DURATION)
+      setExtendCount(0)
+      extendedAtRef.current = new Set()
+      setAutoEvent("⚠ 10분 연속 미집중 → 자동 휴식")
+      return
+    }
+
+    // 10분 연속 집중 → 집중 시간 연장 (focus 모드일 때만, 같은 minute에서 중복 연장 방지)
+    if (allFocus && mode === "focus" && running && !extendedAtRef.current.has(latest.minute)) {
+      extendedAtRef.current.add(latest.minute)
+      setSecondsLeft(prev => prev + EXTEND_BY)
+      setExtendCount(prev => prev + 1)
+      setAutoEvent(`✨ 10분 연속 집중 → +5분 연장`)
+    }
+  }, [focusScores, mode, running, enabled])
+
+  // 자동 이벤트 메시지 5초 후 자동 제거
+  useEffect(() => {
+    if (!autoEvent) return
+    const t = setTimeout(() => setAutoEvent(""), 5000)
+    return () => clearTimeout(t)
+  }, [autoEvent])
+
+  function toggleEnabled() {
+    if (enabled) {
+      // 끄기 → 정지 + 리셋
+      setRunning(false)
+      setMode("focus")
+      setSecondsLeft(FOCUS_DURATION_DEFAULT)
+      setExtendCount(0)
+      extendedAtRef.current = new Set()
+      setAutoEvent("")
+    }
+    setEnabled(prev => !prev)
+  }
+
+  function toggleRunning() {
+    if (!enabled) return
+    setRunning(prev => !prev)
+  }
+
+  function resetTimer() {
+    setMode("focus")
+    setSecondsLeft(FOCUS_DURATION_DEFAULT)
+    setExtendCount(0)
+    extendedAtRef.current = new Set()
+    setRunning(false)
+    setAutoEvent("")
+  }
+
+  const minutes      = Math.floor(secondsLeft / 60)
+  const seconds      = secondsLeft % 60
+  const totalForMode = mode === "focus" ? FOCUS_DURATION_DEFAULT + extendCount * EXTEND_BY : BREAK_DURATION
+  const progress     = ((totalForMode - secondsLeft) / totalForMode) * 100
+
+  return (
+    <div style={{ ...PANEL.wrap, flexShrink:0 }}>
+      <div style={PANEL.header}>
+        <span style={PANEL.headerText}>🍅 적응형 뽀모도로</span>
+        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}>
+          <span style={{ fontSize:10, color:LIME_MAIN, fontFamily:"monospace" }}>오늘 {todayCount}회</span>
+          {/* on/off 토글 */}
+          <button onClick={toggleEnabled}
+            style={{ width:36, height:18,
+                     background: enabled ? LIME_MAIN : "#c0cbdc",
+                     border:`2px solid ${PIX}`, position:"relative",
+                     cursor:"pointer", padding:0, clipPath:pixClip }}>
+            <div style={{ position:"absolute", top:2, left: enabled ? 18 : 2,
+                          width:12, height:12,
+                          background: enabled ? "#2a4a08" : "#8b9bb4",
+                          border:`1px solid ${PIX}`, transition:"left 0.2s" }} />
+          </button>
+        </div>
+      </div>
+      <div style={{ ...PANEL.body, padding:"12px" }}>
+        {!enabled ? (
+          <div style={{ textAlign:"center", padding:"16px 0", fontSize:11, color:"#3a5a10", fontFamily:"monospace" }}>
+            뽀모도로가 꺼져 있어요
+          </div>
+        ) : (
+          <>
+            {/* 원형 뽀모도로 타이머 */}
+            {(() => {
+              const R = 50, CX = 75, CY = 75, SW = 12
+              const CIRC = 2 * Math.PI * R
+              const offset = CIRC * (1 - progress / 100)
+              const trackColor = mode === "focus" ? LIME_HI : BODY_MAIN
+              const fillColor  = mode === "focus" ? LIME_DARK : BODY_DARK
+              return (
+                <div style={{ display:"flex", justifyContent:"center", marginBottom:8 }}>
+                  <svg width={150} height={150} viewBox="0 0 150 150" style={{ display:"block" }}>
+                    {/* 중앙 배경 */}
+                    <circle cx={CX} cy={CY} r={R - SW/2 - 3} fill={BODY_MAIN} />
+                    <circle cx={CX} cy={CY} r={R - SW/2 - 3} fill="none" stroke={PIX} strokeWidth={2} />
+                    {/* 외곽 경계 */}
+                    <circle cx={CX} cy={CY} r={R + SW/2 + 2} fill="none" stroke={PIX} strokeWidth={2} />
+                    {/* 트랙 */}
+                    <circle cx={CX} cy={CY} r={R} fill="none" stroke={trackColor} strokeWidth={SW} />
+                    {/* 진행 호 */}
+                    <circle cx={CX} cy={CY} r={R} fill="none"
+                      stroke={fillColor} strokeWidth={SW}
+                      strokeDasharray={CIRC} strokeDashoffset={offset}
+                      strokeLinecap="butt"
+                      style={{ transform:`rotate(-90deg)`, transformOrigin:`${CX}px ${CY}px`,
+                               transition:"stroke-dashoffset 1s linear" }} />
+                    {/* 모드 */}
+                    <text x={CX} y={CY - 8} textAnchor="middle"
+                      fontSize={9} fontWeight={700} fill="#3a5a10" fontFamily="monospace">
+                      {mode === "focus" ? "집중 시간" : "휴식 시간"}{mode === "focus" && extendCount > 0 ? ` +${extendCount*5}분` : ""}
+                    </text>
+                    {/* 시간 */}
+                    <text x={CX} y={CY + 14} textAnchor="middle" dominantBaseline="middle"
+                      fontSize={24} fontWeight={700} fill="#2a1a0a" fontFamily="'Courier New',monospace">
+                      {String(minutes).padStart(2,"0")}:{String(seconds).padStart(2,"0")}
+                    </text>
+                  </svg>
+                </div>
+              )
+            })()}
+
+            {/* 자동 이벤트 메시지 */}
+            {autoEvent && (
+              <div style={{ fontSize:10, color:"#2a4a08", textAlign:"center",
+                            background:LIME_HI, border:`2px solid ${PIX}`,
+                            clipPath:pixClip, padding:"4px 6px", marginBottom:8,
+                            fontFamily:"monospace" }}>
+                {autoEvent}
+              </div>
+            )}
+
+            {/* 컨트롤 버튼 */}
+            <div style={{ display:"flex", gap:6 }}>
+              <button onClick={toggleRunning}
+                style={{ flex:1, padding:"6px 0",
+                         background: running ? "#e43b44" : LIME_MAIN,
+                         border:`2px solid ${PIX}`, borderBottom:`4px solid ${PIX}`,
+                         boxShadow:`inset 0 2px 0 ${running ? "#ee686e" : LIME_HI}`,
+                         color: running ? "#FFFDD0" : "#2a1a0a",
+                         fontWeight:700, cursor:"pointer", fontSize:11,
+                         fontFamily:"monospace", clipPath:pixClip }}>
+                {running ? "⏸ 일시정지" : "▶ 시작"}
+              </button>
+              <button onClick={resetTimer}
+                style={{ padding:"6px 12px", background:BODY_MAIN,
+                         border:`2px solid ${PIX}`, borderBottom:`4px solid ${PIX}`,
+                         boxShadow:`inset 0 2px 0 ${BODY_HI}`,
+                         color:"#2a4a08", fontWeight:700, cursor:"pointer", fontSize:11,
+                         fontFamily:"monospace", clipPath:pixClip }}>
+                ↺
+              </button>
+            </div>
+
+            {/* 안내 */}
+            <div style={{ marginTop:8, fontSize:9, color:"#3a5a10", lineHeight:1.5, fontFamily:"monospace" }}>
+              💡 10분 연속 집중 시 자동 +5분 연장<br/>
+              💡 10분 연속 미집중 시 자동 휴식 전환
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── 공통 팝업 컴포넌트 ──
+function LecturePopup({ children, onClose, wide, title, icon }) {
+  const px = 3
+  const hdrBg = `linear-gradient(180deg,${LIME_HI} 0,${LIME_HI} ${px}px,${LIME_MAIN} ${px}px,${LIME_MAIN} calc(100% - ${px*2}px),${LIME_DARK} calc(100% - ${px*2}px),${LIME_DARK} calc(100% - ${px}px),${PIX} calc(100% - ${px}px),${PIX} 100%)`
+  const bodyBg = `linear-gradient(180deg,${BODY_HI} 0,${BODY_HI} ${px}px,${BODY_MAIN} ${px}px,${BODY_MAIN} calc(100% - ${px*2}px),${BODY_DARK} calc(100% - ${px*2}px),${BODY_DARK} calc(100% - ${px}px),${PIX} calc(100% - ${px}px),${PIX} 100%)`
+  const hdrClip = `polygon(${px}px 0,calc(100% - ${px}px) 0,100% ${px}px,100% 100%,0 100%,0 ${px}px)`
+  const bodyClip = `polygon(0 0,100% 0,100% calc(100% - ${px}px),calc(100% - ${px}px) calc(100% - ${px}px),calc(100% - ${px}px) 100%,${px}px 100%,${px}px calc(100% - ${px}px),0 calc(100% - ${px}px))`
+  return (
+    <>
+      <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(20,10,0,0.55)", zIndex:200 }} />
+      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)",
+                    zIndex:201, width: wide ? "min(700px,94vw)" : "min(480px,92vw)",
+                    maxHeight:"92vh", display:"flex", flexDirection:"column",
+                    boxShadow:"0 8px 32px rgba(0,0,0,0.5)" }}>
+        <div style={{ background:hdrBg, boxShadow:sideShadow, padding:`${px*3}px ${px*4}px`,
+                      minHeight:48, display:"flex", alignItems:"center", gap:8, clipPath:hdrClip }}>
+          {icon && <span style={{ fontSize:18, lineHeight:1 }}>{icon}</span>}
+          <span style={{ fontSize:14, fontWeight:700, color:"#2a1a0a", fontFamily:"monospace",
+                         flex:1, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{title}</span>
+          <button onClick={onClose} style={{
+            flexShrink:0, width:26, height:26, background:"#e43b44",
+            border:`2px solid ${PIX}`,
+            boxShadow:"inset 0 2px 0 #ee686e, inset 0 -2px 0 #9e2835",
+            color:"#fff", fontSize:14, fontWeight:900, cursor:"pointer", outline:"none", padding:0,
+            display:"flex", alignItems:"center", justifyContent:"center", lineHeight:1,
+            clipPath:"polygon(3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px),0 3px)",
+          }}>✕</button>
+        </div>
+        <div style={{ background:bodyBg, boxShadow:sideShadow,
+                      padding:`${px*4}px ${px*5}px ${px*5}px`,
+                      color:"#2a1a0a", fontFamily:"monospace",
+                      overflowY:"auto", maxHeight:"85vh", flex:1, clipPath:bodyClip }}>
+          {children}
+        </div>
+      </div>
+    </>
   )
 }
 
@@ -963,289 +1423,309 @@ function QuizAfterLecture({ onClose, sessionId, lecture, segments }) {
   }
 
   return (
-    <>
-      <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.72)", zIndex:200 }} />
-      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)",
-                    background:"#F9E076", border:"4px solid #c89100", borderBottom:"6px solid #895129", borderRadius:10, padding:0,
-                    zIndex:201, width:"min(700px,94vw)", maxHeight:"92vh", overflowY:"auto" }}>
-        <div style={{ background:"linear-gradient(180deg,#F9E076,#e8c550)", padding:"10px 16px",
-                      borderBottom:"3px solid #c89100", display:"flex", alignItems:"center" }}>
-          <span style={{ fontSize:13, fontWeight:700, color:"#2a1a0a", textShadow:"none" }}>
-            🐾 강의 퀴즈
-          </span>
-          <button onClick={onClose}
-            style={{ marginLeft:"auto", background:"#895129", border:"2px solid #6b3d1f",
-                     borderBottom:"3px solid #2a1a0a", borderRadius:4, width:22, height:22,
-                     color:"#F9E076", fontSize:11, fontWeight:700, cursor:"pointer",
-                     display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
+    <LecturePopup onClose={onClose} wide title="강의 퀴즈" icon="🐾">
+      {step === "intro" && (
+        <div style={{ textAlign:"center", paddingBottom:"20px" }}>
+          <div style={{ fontSize:40, marginBottom:12 }}>🐻‍❄️</div>
+          <div style={{ fontSize:18, fontWeight:700, marginBottom:8, color:"#2a1a0a" }}>강의 수고하셨어요!</div>
+          <div style={{ fontSize:13, color:"#3a5a10", marginBottom:20, lineHeight:1.6 }}>
+            {lecture?.title ?? "강의"} 수강이 완료됐어요.<br/>
+            미집중 구간 <strong style={{ color:LIME_DARK }}>{segments.length}개</strong>가 감지됐어요.<br/>
+            포석호와 함께 퀴즈로 복습해볼까요?
+          </div>
+          {segments.length > 0 && (
+            <div style={{ background:LIME_HI, border:`2px solid ${PIX}`, clipPath:pixClip,
+                          boxShadow:sideShadow, padding:"10px 14px", marginBottom:20, textAlign:"left" }}>
+              <div style={{ fontSize:11, color:"#3a5a10", fontWeight:700, marginBottom:6 }}>📌 미집중 구간</div>
+              {segments.slice(0,3).map((seg,i) => (
+                <div key={i} style={{ fontSize:11, color:"#2a4a08", padding:"3px 0" }}>
+                  {formatTime(seg.start ?? 0)} ~ {formatTime(seg.end ?? 0)}
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display:"flex", gap:10 }}>
+            <button onClick={onClose}
+              style={{ flex:1, padding:"10px 0", background:BODY_MAIN, border:`2px solid ${PIX}`,
+                       color:"#2a4a08", fontSize:13, cursor:"pointer", clipPath:pixClip,
+                       fontFamily:"monospace" }}>
+              📅 나중에 하기
+            </button>
+            <button onClick={startQuiz}
+              style={{ flex:2, padding:"10px 0", background:LIME_MAIN, border:`2px solid ${PIX}`,
+                       borderBottom:`4px solid ${PIX}`,
+                       boxShadow:`inset 0 2px 0 ${LIME_HI}`,
+                       color:"#2a1a0a", fontSize:13, fontWeight:700, cursor:"pointer",
+                       clipPath:pixClip, fontFamily:"monospace" }}>
+              🐾 퀴즈 시작하기
+            </button>
+          </div>
+          <div style={{ marginTop:10, fontSize:10, color:"#555", fontFamily:"monospace" }}>
+            나중에 하기 → 홈 포석호에서 다시 풀 수 있어요
+          </div>
         </div>
-        <div style={{ background:"#FFFDD0", padding:"20px" }}>
-        {step === "intro" && (
-          <div style={{ textAlign:"center", paddingBottom:"20px" }}>
-            <div style={{ fontSize:40, marginBottom:12 }}>🐻‍❄️</div>
-            <div style={{ fontSize:18, fontWeight:700, marginBottom:8, color:"#2a1a0a" }}>강의 수고하셨어요!</div>
-            <div style={{ fontSize:13, color:"#6b3d1f", marginBottom:20, lineHeight:1.6 }}>
-              {lecture?.title ?? "강의"} 수강이 완료됐어요.<br/>
-              미집중 구간 <strong style={{ color:"#FFC107" }}>{segments.length}개</strong>가 감지됐어요.<br/>
-              포석호와 함께 퀴즈로 복습해볼까요?
-            </div>
-            {segments.length > 0 && (
-              <div style={{ background:"#fff4a0", border:"1px solid #c89100", borderRadius:8, padding:"10px 14px", marginBottom:20, textAlign:"left" }}>
-                <div style={{ fontSize:11, color:"#895129", fontWeight:700, marginBottom:6 }}>📌 미집중 구간</div>
-                {segments.slice(0,3).map((seg,i) => (
-                  <div key={i} style={{ fontSize:11, color:"#6b3d1f", padding:"3px 0" }}>
-                    {formatTime(seg.start ?? 0)} ~ {formatTime(seg.end ?? 0)}
-                  </div>
-                ))}
-              </div>
-            )}
-            <div style={{ display:"flex", gap:10 }}>
-              <button onClick={onClose}
-                style={{ flex:1, padding:"10px 0", background:"transparent", border:"1px solid #6b3d1f",
-                         borderRadius:8, color:"#aaa", fontSize:13, cursor:"pointer" }}>
-                📅 나중에 하기
-              </button>
-              <button onClick={startQuiz}
-                style={{ flex:2, padding:"10px 0", background:"linear-gradient(180deg,#c89100,#895129)", border:"2px solid #c89100",
-                         borderBottom:"3px solid #895129", borderRadius:6, color:"#FFFDD0", fontSize:13, fontWeight:700, cursor:"pointer" }}>
-                🐾 퀴즈 시작하기
-              </button>
-            </div>
-            <div style={{ marginTop:10, fontSize:10, color:"#555" }}>
-              나중에 하기 → 홈 포석호에서 다시 풀 수 있어요
+      )}
+
+      {step === "chat" && (
+        <div>
+          {/* 헤더 */}
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
+            <div style={{ fontSize:24 }}>🐻‍❄️</div>
+            <div style={{ fontSize:15, fontWeight:700, color:"#2a1a0a" }}>포석호와 퀴즈</div>
+            <div style={{ marginLeft:"auto", fontSize:11,
+                          color: isFinished ? LIME_DARK : "#3a5a10", fontFamily:"monospace" }}>
+              {isFinished ? "완료 ✅" : "진행중..."}
             </div>
           </div>
-        )}
+          <div style={{ height:4, background:LIME_HI, overflow:"hidden", marginBottom:12 }}>
+            <div style={{ width: isFinished ? "100%" : "50%", height:"100%",
+                          background:LIME_DARK, transition:"width 0.4s" }} />
+          </div>
 
-        {step === "chat" && (
-          <div>
-            {/* 헤더 */}
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
-              <div style={{ fontSize:24 }}>🐻‍❄️</div>
-              <div style={{ fontSize:15, fontWeight:700, color:"#2a1a0a" }}>포석호와 퀴즈</div>
-              <div style={{ marginLeft:"auto", fontSize:11, color:"#c89100" }}>{isFinished ? "완료 ✅" : "진행중..."}</div>
+          {/* ── 2컬럼 레이아웃: 채팅(좌) + 분석(우) ── */}
+          <div style={{ display:"flex", gap:12, alignItems:"flex-start" }}>
+
+            {/* 왼쪽: 채팅 영역 */}
+            <div style={{ flex:"1 1 0", minWidth:0, display:"flex", flexDirection:"column" }}>
+              <div ref={chatRef}
+                style={{ height:360, overflowY:"auto", display:"flex", flexDirection:"column", gap:6,
+                         borderTop:`3px solid ${PIX}`, paddingTop:10, marginBottom:10 }}>
+                {messages.map((m,i) => (
+                  <div key={i} style={{ display:"flex",
+                                         justifyContent: m.type==="user" ? "flex-end"
+                                                       : m.type==="system" ? "center"
+                                                       : "flex-start",
+                                         alignItems:"flex-end", gap:4 }}>
+                    {m.type==="npc" && <span style={{ fontSize:14, flexShrink:0 }}>🐻‍❄️</span>}
+                    {m.type==="system" && (
+                      <div style={{ fontSize:10, color:"#3a5a10", background:LIME_HI,
+                                    border:`2px solid ${PIX}`, clipPath:pixClip,
+                                    padding:"3px 10px", fontFamily:"monospace" }}>{m.text}</div>
+                    )}
+                    {(m.type==="npc" || m.type==="user") && (
+                      <div style={{ maxWidth:"82%", padding:"7px 11px", fontSize:12, lineHeight:1.5,
+                                     whiteSpace:"pre-wrap", wordBreak:"break-word",
+                                     background: m.type==="user" ? LIME_MAIN : BODY_MAIN,
+                                     color:"#2a1a0a",
+                                     border:`2px solid ${PIX}`, clipPath:pixClip,
+                                     fontFamily:"monospace" }}>{m.text}</div>
+                    )}
+                  </div>
+                ))}
+                {loading && <div style={{ fontSize:11, color:"#3a5a10", paddingLeft:22,
+                                          fontFamily:"monospace" }}>포석호가 생각 중...</div>}
+              </div>
+              <div style={{ display:"flex", gap:6 }}>
+                <input value={input} onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => e.key==="Enter" && sendAnswer()}
+                  placeholder="답변을 입력하세요..." disabled={loading}
+                  style={{ flex:1, background:BODY_HI, border:`2px solid ${PIX}`, borderRadius:0,
+                           padding:"8px 12px", color:"#2a1a0a", fontSize:12, outline:"none",
+                           opacity:loading?0.6:1, fontFamily:"monospace", clipPath:pixClip }} />
+                <button onClick={sendAnswer} disabled={loading}
+                  style={{ background:LIME_MAIN, border:`2px solid ${PIX}`,
+                           borderBottom:`4px solid ${PIX}`,
+                           boxShadow:`inset 0 2px 0 ${LIME_HI}`,
+                           padding:"8px 16px", fontWeight:700,
+                           cursor:loading?"not-allowed":"pointer", fontSize:12,
+                           color:"#2a1a0a", fontFamily:"monospace",
+                           clipPath:pixClip, opacity:loading?0.6:1 }}>전송</button>
+              </div>
             </div>
-            <div style={{ height:4, background:"#e8c550", borderRadius:2, overflow:"hidden", marginBottom:12 }}>
-              <div style={{ width: isFinished ? "100%" : "50%", height:"100%", background:"#c89100", transition:"width 0.4s" }} />
-            </div>
 
-            {/* ── 2컬럼 레이아웃: 채팅(좌) + 분석(우) ── */}
-            <div style={{ display:"flex", gap:12, alignItems:"flex-start" }}>
-
-              {/* 왼쪽: 채팅 영역 */}
-              <div style={{ flex:"1 1 0", minWidth:0, display:"flex", flexDirection:"column" }}>
-                <div ref={chatRef}
-                  style={{ height:360, overflowY:"auto", display:"flex", flexDirection:"column", gap:6,
-                           borderTop:"1px solid #e8c550", paddingTop:10, marginBottom:10 }}>
-                  {messages.map((m,i) => (
-                    <div key={i} style={{ display:"flex",
-                                           justifyContent: m.type==="user" ? "flex-end"
-                                                         : m.type==="system" ? "center"
-                                                         : "flex-start",
-                                           alignItems:"flex-end", gap:4 }}>
-                      {m.type==="npc" && <span style={{ fontSize:14, flexShrink:0 }}>🐻‍❄️</span>}
-                      {m.type==="system" && (
-                        <div style={{ fontSize:10, color:"#895129", background:"#F9E076",
-                                      border:"1px solid #c89100", borderRadius:6, padding:"3px 10px" }}>{m.text}</div>
-                      )}
-                      {(m.type==="npc" || m.type==="user") && (
-                        <div style={{ maxWidth:"82%", padding:"7px 11px", borderRadius:10, fontSize:12, lineHeight:1.5,
-                                       whiteSpace:"pre-wrap", wordBreak:"break-word",
-                                       background: m.type==="user" ? "#c89100" : "#fff4a0",
-                                       color: m.type==="user" ? "#FFFDD0" : "#2a1a0a" }}>{m.text}</div>
-                      )}
-                    </div>
-                  ))}
-                  {loading && <div style={{ fontSize:11, color:"#c89100", paddingLeft:22 }}>포석호가 생각 중...</div>}
-                </div>
-                <div style={{ display:"flex", gap:6 }}>
-                  <input value={input} onChange={e => setInput(e.target.value)}
-                    onKeyDown={e => e.key==="Enter" && sendAnswer()}
-                    placeholder="답변을 입력하세요..." disabled={loading}
-                    style={{ flex:1, background:"#FFFDD0", border:"2px solid #c89100", borderRadius:6,
-                             padding:"8px 12px", color:"#2a1a0a", fontSize:12, outline:"none", opacity:loading?0.6:1 }} />
-                  <button onClick={sendAnswer} disabled={loading}
-                    style={{ background:"linear-gradient(180deg,#c89100,#895129)", border:"2px solid #c89100",
-                             borderBottom:"3px solid #895129", borderRadius:6, padding:"8px 16px",
-                             fontWeight:700, cursor:loading?"not-allowed":"pointer", fontSize:12,
-                             color:"#FFFDD0", opacity:loading?0.6:1 }}>전송</button>
-                </div>
+            {/* 오른쪽: 분석 결과 패널 */}
+            <div style={{ width:210, flexShrink:0, display:"flex", flexDirection:"column", gap:8 }}>
+              {/* 고정 헤더 */}
+              <div style={{ background:LIME_MAIN, border:`2px solid ${PIX}`,
+                            clipPath:pixClip, padding:"7px 10px", textAlign:"center" }}>
+                <span style={{ fontSize:11, fontWeight:700, color:"#2a1a0a", fontFamily:"monospace" }}>
+                  📊 퀴즈 분석 결과
+                </span>
               </div>
 
-              {/* 오른쪽: 분석 결과 패널 */}
-              <div style={{ width:210, flexShrink:0, display:"flex", flexDirection:"column", gap:8 }}>
-                {/* 고정 헤더 */}
-                <div style={{ background:"linear-gradient(180deg,#F9E076,#e8c550)",
-                              border:"2px solid #c89100", borderBottom:"3px solid #895129",
-                              borderRadius:8, padding:"7px 10px", textAlign:"center" }}>
-                  <span style={{ fontSize:11, fontWeight:700, color:"#2a1a0a", textShadow:"none" }}>
-                    📊 퀴즈 분석 결과
-                  </span>
+              {/* 결과가 없을 때 */}
+              {!scoreData && (
+                <div style={{ background:LIME_HI, border:`2px solid ${PIX}`,
+                              clipPath:pixClip, padding:"20px 10px", textAlign:"center" }}>
+                  <div style={{ fontSize:22, marginBottom:6 }}>🐾</div>
+                  <div style={{ fontSize:10, color:"#3a5a10", lineHeight:1.5, fontFamily:"monospace" }}>
+                    답변을 제출하면<br/>분석 결과가<br/>여기에 표시돼요
+                  </div>
                 </div>
+              )}
 
-                {/* 결과가 없을 때 */}
-                {!scoreData && (
-                  <div style={{ background:"#fff4a0", border:"1px solid #e8c550",
-                                borderRadius:8, padding:"20px 10px", textAlign:"center" }}>
-                    <div style={{ fontSize:22, marginBottom:6 }}>🐾</div>
-                    <div style={{ fontSize:10, color:"#c89100", lineHeight:1.5 }}>
-                      답변을 제출하면<br/>분석 결과가<br/>여기에 표시돼요
+              {/* 결과 카드 */}
+              {scoreData && (
+                <div style={{ background: BODY_MAIN,
+                              border: `2px solid ${PIX}`,
+                              clipPath: pixClip,
+                              padding:"12px 10px", fontSize:11 }}>
+                  {/* 총점 */}
+                  <div style={{ textAlign:"center", marginBottom:10 }}>
+                    <div style={{ fontSize:28, fontWeight:700, lineHeight:1,
+                                  color: totalColor(scoreData.total) }}>
+                      {scoreData.total}점
+                    </div>
+                    <div style={{ marginTop:4 }}>
+                      <span style={{ fontSize:9, fontWeight:700, padding:"2px 10px",
+                                     background: scoreData.match==="일치" ? SCORE_HI_BG
+                                               : scoreData.match==="부분일치" ? SCORE_MID_BG
+                                               : SCORE_LOW_BG,
+                                     color:"#2a1a0a",
+                                     border:`2px solid ${PIX}`, clipPath:pixClip,
+                                     fontFamily:"monospace" }}>
+                        {scoreData.match || "채점됨"}
+                      </span>
                     </div>
                   </div>
-                )}
 
-                {/* 결과 카드 */}
-                {scoreData && (
-                  <div style={{ background:"#fff4a0", border:"2px solid #c89100",
-                                borderBottom:"3px solid #895129", borderRadius:8,
-                                padding:"12px 10px", fontSize:11 }}>
-                    {/* 총점 */}
-                    <div style={{ textAlign:"center", marginBottom:10 }}>
-                      <div style={{ fontSize:28, fontWeight:700, lineHeight:1,
-                                    color: scoreData.total>=70 ? "#895129" : scoreData.total>=40 ? "#895129" : "#c42f1c" }}>
-                        {scoreData.total}점
-                      </div>
-                      <div style={{ marginTop:4 }}>
-                        <span style={{ fontSize:9, fontWeight:700, borderRadius:10, padding:"2px 10px",
-                                       background: scoreData.match==="일치" ? "#fff4a0" : scoreData.match==="부분일치" ? "#F9E076" : "#fff0f0",
-                                       color:      scoreData.match==="일치" ? "#895129" : scoreData.match==="부분일치" ? "#895129" : "#c42f1c",
-                                       border:`1px solid ${scoreData.match==="일치" ? "#c89100" : scoreData.match==="부분일치" ? "#c89100" : "#d94040"}` }}>
-                          {scoreData.match || "채점됨"}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* 항목별 바 */}
-                    <div style={{ borderTop:"1px solid #e8c550", paddingTop:8, marginBottom:8 }}>
-                      {[
-                        { label:"핵심개념", val:scoreData.concept,  max:40 },
-                        { label:"정확성",   val:scoreData.accuracy, max:40 },
-                        { label:"구체성",   val:scoreData.detail,   max:20 },
-                      ].map(item => (
+                  {/* 항목별 바 */}
+                  <div style={{ borderTop:`2px solid ${LIME_HI}`, paddingTop:8, marginBottom:8 }}>
+                    {[
+                      { label:"핵심개념", val:scoreData.concept,  max:40 },
+                      { label:"정확성",   val:scoreData.accuracy, max:40 },
+                      { label:"구체성",   val:scoreData.detail,   max:20 },
+                    ].map(item => {
+                      const ratio = item.val / item.max
+                      return (
                         <div key={item.label} style={{ marginBottom:7 }}>
                           <div style={{ display:"flex", justifyContent:"space-between",
-                                        fontSize:10, color:"#6b3d1f", marginBottom:2 }}>
+                                        fontSize:10, color:"#2a4a08", marginBottom:2, fontFamily:"monospace" }}>
                             <span>{item.label}</span>
-                            <span style={{ fontWeight:700,
-                                           color: item.val/item.max>=0.7 ? "#895129" : item.val/item.max>=0.4 ? "#895129" : "#c42f1c" }}>
+                            <span style={{ fontWeight:700, color: scoreColor(ratio) }}>
                               {item.val}/{item.max}
                             </span>
                           </div>
-                          <div style={{ height:6, background:"#e8c55055", borderRadius:3, overflow:"hidden" }}>
-                            <div style={{ width:`${(item.val/item.max)*100}%`, height:"100%", borderRadius:3,
-                                          background: item.val/item.max>=0.7 ? "#c89100" : item.val/item.max>=0.4 ? "#c89100" : "#c42f1c",
+                          <div style={{ height:6, background: scoreColorBg(ratio), overflow:"hidden",
+                                        border:`1px solid ${PIX}` }}>
+                            <div style={{ width:`${ratio*100}%`, height:"100%",
+                                          background: scoreColor(ratio),
                                           transition:"width 0.6s ease" }} />
                           </div>
                         </div>
-                      ))}
-                    </div>
-
-                    {/* 핵심 키워드 (전체) */}
-                    {((scoreData.matched_keywords?.length ?? 0) + (scoreData.missing_keywords?.length ?? 0)) > 0 && (
-                      <div style={{ borderTop:"1px solid #e8c550", paddingTop:8, marginBottom:8 }}>
-                        <div style={{ fontSize:9, color:"#895129", fontWeight:700, marginBottom:4 }}>🔑 핵심 키워드</div>
-                        <div style={{ display:"flex", flexWrap:"wrap", gap:3 }}>
-                          {[...(scoreData.matched_keywords ?? []), ...(scoreData.missing_keywords ?? [])].map(k => (
-                            <span key={k} style={{ background:"#fff4a0", color:"#6b3d1f",
-                                                   border:"1px solid #c89100",
-                                                   borderRadius:10, padding:"1px 6px", fontSize:9, fontWeight:600 }}>
-                              #{k}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 맞춤 / 누락 상세 */}
-                    {((scoreData.matched_keywords?.length ?? 0) > 0 || (scoreData.missing_keywords?.length ?? 0) > 0) && (
-                      <div style={{ borderTop:"1px solid #e8c550", paddingTop:8, marginBottom:8 }}>
-                        <div style={{ fontSize:9, color:"#895129", fontWeight:700, marginBottom:4 }}>답변 분석</div>
-                        <div style={{ display:"flex", flexWrap:"wrap", gap:3 }}>
-                          {scoreData.matched_keywords?.map(k => (
-                            <span key={`m-${k}`} style={{ background:"#e0f5ec", color:"#187050",
-                                                   border:"1px solid #22c98a",
-                                                   borderRadius:10, padding:"1px 6px", fontSize:9 }}>✓ {k}</span>
-                          ))}
-                          {scoreData.missing_keywords?.map(k => (
-                            <span key={`x-${k}`} style={{ background:"#fff0f0", color:"#c42f1c",
-                                                   border:"1px solid #d94040",
-                                                   borderRadius:10, padding:"1px 6px", fontSize:9 }}>✗ {k}</span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 코멘트 */}
-                    {scoreData.comment && (
-                      <div style={{ borderTop:"1px solid #e8c550", paddingTop:8,
-                                    fontSize:10, color:"#6b3d1f", lineHeight:1.5 }}>
-                        💬 {scoreData.comment}
-                      </div>
-                    )}
-
-                    {/* 유사도 */}
-                    {scoreData.similarity != null && (
-                      <div style={{ marginTop:6, fontSize:10, color:"#c89100", textAlign:"right" }}>
-                        유사도 {Math.round(scoreData.similarity * 100)}%
-                      </div>
-                    )}
+                      )
+                    })}
                   </div>
-                )}
-              </div>
+
+                  {/* 핵심 키워드 (전체) */}
+                  {((scoreData.matched_keywords?.length ?? 0) + (scoreData.missing_keywords?.length ?? 0)) > 0 && (
+                    <div style={{ borderTop:`2px solid ${LIME_HI}`, paddingTop:8, marginBottom:8 }}>
+                      <div style={{ fontSize:9, color:"#3a5a10", fontWeight:700, marginBottom:4, fontFamily:"monospace" }}>🔑 핵심 키워드</div>
+                      <div style={{ display:"flex", flexWrap:"wrap", gap:3 }}>
+                        {[...(scoreData.matched_keywords ?? []), ...(scoreData.missing_keywords ?? [])].map(k => (
+                          <span key={k} style={{ background:LIME_HI, color:"#2a4a08",
+                                                 border:`2px solid ${PIX}`,
+                                                 padding:"1px 6px", fontSize:9, fontWeight:600,
+                                                 clipPath:pixClip, fontFamily:"monospace" }}>
+                            #{k}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 맞춤 / 누락 상세 */}
+                  {((scoreData.matched_keywords?.length ?? 0) > 0 || (scoreData.missing_keywords?.length ?? 0) > 0) && (
+                    <div style={{ borderTop:`2px solid ${LIME_HI}`, paddingTop:8, marginBottom:8 }}>
+                      <div style={{ fontSize:9, color:"#3a5a10", fontWeight:700, marginBottom:4, fontFamily:"monospace" }}>답변 분석</div>
+                      <div style={{ display:"flex", flexWrap:"wrap", gap:3 }}>
+                        {scoreData.matched_keywords?.map(k => (
+                          <span key={`m-${k}`} style={{ background:LIME_HI, color:"#2a4a08",
+                                                 border:`2px solid ${PIX}`,
+                                                 padding:"1px 6px", fontSize:9,
+                                                 clipPath:pixClip, fontFamily:"monospace" }}>✓ {k}</span>
+                        ))}
+                        {scoreData.missing_keywords?.map(k => (
+                          <span key={`x-${k}`} style={{ background:"#fff0f0", color:"#c42f1c",
+                                                 border:`2px solid ${PIX}`,
+                                                 padding:"1px 6px", fontSize:9,
+                                                 clipPath:pixClip, fontFamily:"monospace" }}>✗ {k}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 코멘트 */}
+                  {scoreData.comment && (
+                    <div style={{ borderTop:`2px solid ${LIME_HI}`, paddingTop:8,
+                                  fontSize:10, color:"#3a5a10", lineHeight:1.5, fontFamily:"monospace" }}>
+                      💬 {scoreData.comment}
+                    </div>
+                  )}
+
+                  {/* 유사도 */}
+                  {scoreData.similarity != null && (
+                    <div style={{ marginTop:6, fontSize:10, color:LIME_DARK, textAlign:"right", fontFamily:"monospace" }}>
+                      유사도 {Math.round(scoreData.similarity * 100)}%
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {step === "done" && (
-          <div style={{ textAlign:"center", padding:"20px 0" }}>
-            <div style={{ fontSize:48, marginBottom:12 }}>🎉</div>
-            <div style={{ fontSize:18, fontWeight:700, marginBottom:8, color:"#2a1a0a" }}>퀴즈 완료!</div>
-            <div style={{ fontSize:13, color:"#6b3d1f", marginBottom:16 }}>
-              오늘도 열심히 공부했어요!<br/>대시보드에서 학습 리포트를 확인해보세요.
-            </div>
-            {scoreData && (
-              <div style={{ background:"#fff4a0", border:"1px solid #c89100", borderRadius:8,
-                            padding:"12px 16px", marginBottom:16, textAlign:"left" }}>
-                <div style={{ fontSize:11, fontWeight:700, color:"#895129", marginBottom:8 }}>📊 최종 이해도</div>
-                <div style={{ display:"flex", justifyContent:"center", marginBottom:10 }}>
-                  <div style={{ fontSize:32, fontWeight:700,
-                                color: scoreData.total >= 70 ? "#895129" : scoreData.total >= 40 ? "#895129" : "#c42f1c" }}>
-                    {scoreData.total}점
-                  </div>
+      {step === "done" && (
+        <div style={{ textAlign:"center", padding:"20px 0" }}>
+          <div style={{ fontSize:48, marginBottom:12 }}>🎉</div>
+          <div style={{ fontSize:18, fontWeight:700, marginBottom:8, color:"#2a1a0a" }}>퀴즈 완료!</div>
+          <div style={{ fontSize:13, color:"#3a5a10", marginBottom:16 }}>
+            오늘도 열심히 공부했어요!<br/>대시보드에서 학습 리포트를 확인해보세요.
+          </div>
+          {scoreData && (
+            <div style={{ background:BODY_MAIN, border:`2px solid ${PIX}`, clipPath:pixClip,
+                          padding:"12px 16px", marginBottom:16, textAlign:"left" }}>
+              <div style={{ fontSize:11, fontWeight:700, color:"#3a5a10", marginBottom:8, fontFamily:"monospace" }}>📊 최종 이해도</div>
+              <div style={{ display:"flex", justifyContent:"center", marginBottom:10 }}>
+                <div style={{ fontSize:32, fontWeight:700,
+                              color: totalColor(scoreData.total) }}>
+                  {scoreData.total}점
                 </div>
-                <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
-                  {[
-                    { label:"핵심 개념", value: scoreData.concept, max:40 },
-                    { label:"설명 정확성", value: scoreData.accuracy, max:40 },
-                    { label:"표현 구체성", value: scoreData.detail, max:20 },
-                  ].map(item => (
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+                {[
+                  { label:"핵심 개념", value: scoreData.concept, max:40 },
+                  { label:"설명 정확성", value: scoreData.accuracy, max:40 },
+                  { label:"표현 구체성", value: scoreData.detail, max:20 },
+                ].map(item => {
+                  const ratio = item.value / item.max
+                  return (
                     <div key={item.label}>
-                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:"#c89100", marginBottom:2 }}>
-                        <span>{item.label}</span><span>{item.value}/{item.max}</span>
+                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:10,
+                                    color:"#3a5a10", marginBottom:2, fontFamily:"monospace" }}>
+                        <span>{item.label}</span>
+                        <span style={{ fontWeight:700, color: scoreColor(ratio) }}>
+                          {item.value}/{item.max}
+                        </span>
                       </div>
-                      <div style={{ height:6, background:"#e8c550", borderRadius:3, overflow:"hidden" }}>
-                        <div style={{ width:`${item.value/item.max*100}%`, height:"100%",
-                                      background: item.value/item.max >= 0.7 ? "#c89100" : "#c89100",
+                      <div style={{ height:6, background: scoreColorBg(ratio), overflow:"hidden",
+                                    border:`1px solid ${PIX}` }}>
+                        <div style={{ width:`${ratio*100}%`, height:"100%",
+                                      background: scoreColor(ratio),
                                       transition:"width 0.5s" }} />
                       </div>
                     </div>
-                  ))}
-                </div>
-                {scoreData.comment && (
-                  <div style={{ marginTop:10, fontSize:11, color:"#6b3d1f", fontStyle:"italic" }}>
-                    💬 {scoreData.comment}
-                  </div>
-                )}
+                  )
+                })}
               </div>
-            )}
-            <button onClick={onClose}
-              style={{ padding:"10px 32px", background:"linear-gradient(180deg,#c89100,#895129)", border:"2px solid #c89100", borderBottom:"3px solid #895129", borderRadius:6,
-                       color:"#FFFDD0", fontSize:13, fontWeight:700, cursor:"pointer" }}>확인</button>
-          </div>
-        )}
-        </div>{/* fdf0cc body */}
-      </div>{/* popup wrap */}
-    </>
+              {scoreData.comment && (
+                <div style={{ marginTop:10, fontSize:11, color:"#3a5a10", fontStyle:"italic",
+                              fontFamily:"monospace" }}>
+                  💬 {scoreData.comment}
+                </div>
+              )}
+            </div>
+          )}
+          <button onClick={onClose}
+            style={{ padding:"10px 32px", background:LIME_MAIN, border:`2px solid ${PIX}`,
+                     borderBottom:`4px solid ${PIX}`,
+                     boxShadow:`inset 0 2px 0 ${LIME_HI}`,
+                     color:"#2a1a0a", fontSize:13, fontWeight:700, cursor:"pointer",
+                     clipPath:pixClip, fontFamily:"monospace" }}>확인</button>
+        </div>
+      )}
+    </LecturePopup>
   )
 }
 
@@ -1290,183 +1770,70 @@ function ReviewQueuePopup({ queue, onClose, sessionId }) {
   }
 
   return (
-    <>
-      <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.72)", zIndex:200 }} />
-      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)",
-                    background:"#F9E076", border:"4px solid #c89100", borderBottom:"6px solid #895129", borderRadius:10, padding:0,
-                    zIndex:201, width:"min(480px,92vw)", maxHeight:"85vh", overflowY:"auto" }}>
-        <div style={{ background:"linear-gradient(180deg,#F9E076,#e8c550)", padding:"10px 16px",
-                      borderBottom:"3px solid #c89100", display:"flex", alignItems:"center" }}>
-          <span style={{ fontSize:13, fontWeight:700, color:"#2a1a0a", textShadow:"none" }}>
-            🐻‍❄️ 미뤄둔 퀴즈 복습
-          </span>
-          <button onClick={onClose}
-            style={{ marginLeft:"auto", background:"#895129", border:"2px solid #6b3d1f",
-                     borderBottom:"3px solid #2a1a0a", borderRadius:4, width:22, height:22,
-                     color:"#F9E076", fontSize:11, fontWeight:700, cursor:"pointer",
-                     display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
+    <LecturePopup onClose={onClose} title="미뤄둔 퀴즈 복습" icon="🐻‍❄️">
+      {!done ? (
+        <div>
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
+            <div style={{ fontSize:11, color:"#3a5a10", fontWeight:700, fontFamily:"monospace" }}>{current+1}/{queue.length}</div>
+          </div>
+          <div style={{ background:LIME_HI, border:`2px solid ${PIX}`, clipPath:pixClip,
+                        padding:"10px 14px", marginBottom:12 }}>
+            <div style={{ fontSize:10, color:"#3a5a10", fontWeight:700, marginBottom:4, fontFamily:"monospace" }}>[{queue[current]?.subject}]</div>
+            <div style={{ fontSize:13, fontWeight:700, color:"#2a1a0a" }}>{queue[current]?.question}</div>
+          </div>
+          <div ref={chatRef}
+            style={{ height:150, overflowY:"auto", display:"flex", flexDirection:"column", gap:6,
+                     marginBottom:10, borderTop:`3px solid ${PIX}`, paddingTop:10 }}>
+            {messages.map((m,i) => (
+              <div key={i} style={{ display:"flex", justifyContent: m.type==="user" ? "flex-end" : "flex-start",
+                                     alignItems:"flex-end", gap:4 }}>
+                {m.type==="npc" && <span style={{ fontSize:14, flexShrink:0 }}>🐻‍❄️</span>}
+                {m.type === "system"
+                  ? <div style={{ width:"100%", textAlign:"center", fontSize:10,
+                                  color:"#3a5a10", padding:"4px 0", fontStyle:"italic",
+                                  fontFamily:"monospace" }}>{m.text}</div>
+                  : <div style={{ maxWidth:"78%", padding:"7px 11px", fontSize:12, lineHeight:1.5,
+                                   background: m.type==="user" ? LIME_MAIN : BODY_MAIN,
+                                   color:"#2a1a0a",
+                                   border:`2px solid ${PIX}`, clipPath:pixClip,
+                                   fontFamily:"monospace" }}>{m.text}</div>
+                }
+              </div>
+            ))}
+            {loading && <div style={{ fontSize:11, color:"#3a5a10", paddingLeft:22,
+                                      fontFamily:"monospace" }}>입력 중...</div>}
+          </div>
+          <div style={{ display:"flex", gap:6 }}>
+            <input value={input} onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key==="Enter" && sendAnswer()}
+              placeholder="답변을 입력하세요..." disabled={loading}
+              style={{ flex:1, background:BODY_HI, border:`2px solid ${PIX}`, borderRadius:0,
+                       padding:"8px 12px", color:"#2a1a0a", fontSize:12, outline:"none",
+                       opacity:loading?0.6:1, fontFamily:"monospace", clipPath:pixClip }} />
+            <button onClick={sendAnswer} disabled={loading}
+              style={{ background:LIME_MAIN, border:`2px solid ${PIX}`,
+                       borderBottom:`4px solid ${PIX}`,
+                       boxShadow:`inset 0 2px 0 ${LIME_HI}`,
+                       padding:"8px 16px",
+                       fontWeight:700, cursor:loading?"not-allowed":"pointer",
+                       fontSize:12, color:"#2a1a0a",
+                       fontFamily:"monospace", clipPath:pixClip,
+                       opacity:loading?0.6:1 }}>전송</button>
+          </div>
         </div>
-        <div style={{ background:"#FFFDD0", padding:"16px" }}>
-        {!done ? (
-          <div>
-            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12 }}>
-              <div style={{ fontSize:11, color:"#c89100", fontWeight:700 }}>{current+1}/{queue.length}</div>
-            </div>
-            <div style={{ background:"#fff4a0", border:"1px solid #c89100", borderRadius:8, padding:"10px 14px", marginBottom:12 }}>
-              <div style={{ fontSize:10, color:"#895129", fontWeight:700, marginBottom:4 }}>[{queue[current]?.subject}]</div>
-              <div style={{ fontSize:13, fontWeight:700, color:"#2a1a0a" }}>{queue[current]?.question}</div>
-            </div>
-            <div ref={chatRef}
-              style={{ height:150, overflowY:"auto", display:"flex", flexDirection:"column", gap:6,
-                       marginBottom:10, borderTop:"1px solid #e8c550", paddingTop:10 }}>
-              {messages.map((m,i) => (
-                <div key={i} style={{ display:"flex", justifyContent: m.type==="user" ? "flex-end" : "flex-start",
-                                       alignItems:"flex-end", gap:4 }}>
-                  {m.type==="npc" && <span style={{ fontSize:14, flexShrink:0 }}>🐻‍❄️</span>}
-                  {m.type === "system"
-                    ? <div style={{ width:"100%", textAlign:"center", fontSize:10,
-                                    color:"#c89100", padding:"4px 0", fontStyle:"italic" }}>{m.text}</div>
-                    : <div style={{ maxWidth:"78%", padding:"7px 11px", borderRadius:10, fontSize:12, lineHeight:1.5,
-                                     background: m.type==="user" ? "#c89100" : "#fff4a0",
-                                     color: m.type==="user" ? "#FFFDD0" : "#2a1a0a" }}>{m.text}</div>
-                  }
-                </div>
-              ))}
-              {loading && <div style={{ fontSize:11, color:"#c89100", paddingLeft:22 }}>입력 중...</div>}
-            </div>
-            <div style={{ display:"flex", gap:6 }}>
-              <input value={input} onChange={e => setInput(e.target.value)}
-                onKeyDown={e => e.key==="Enter" && sendAnswer()}
-                placeholder="답변을 입력하세요..." disabled={loading}
-                style={{ flex:1, background:"#FFFDD0", border:"2px solid #c89100", borderRadius:6,
-                         padding:"8px 12px", color:"#2a1a0a", fontSize:12, outline:"none", opacity:loading?0.6:1 }} />
-              <button onClick={sendAnswer} disabled={loading}
-                style={{ background:"linear-gradient(180deg,#c89100,#895129)", border:"2px solid #c89100", borderBottom:"3px solid #895129", borderRadius:6, padding:"8px 16px",
-                         fontWeight:700, cursor:loading?"not-allowed":"pointer", fontSize:12, color:"#FFFDD0", opacity:loading?0.6:1 }}>전송</button>
-            </div>
-          </div>
-        ) : (
-          <div style={{ textAlign:"center", padding:"20px 0" }}>
-            <div style={{ fontSize:40, marginBottom:12 }}>✅</div>
-            <div style={{ fontSize:16, fontWeight:700, marginBottom:8, color:"#2a1a0a" }}>복습 완료!</div>
-            <div style={{ fontSize:12, color:"#6b3d1f", marginBottom:20 }}>미뤄둔 퀴즈를 모두 풀었어요.</div>
-            <button onClick={onClose}
-              style={{ padding:"10px 32px", background:"linear-gradient(180deg,#c89100,#895129)", border:"2px solid #c89100", borderBottom:"3px solid #895129", borderRadius:6,
-                       color:"#FFFDD0", fontSize:13, fontWeight:700, cursor:"pointer" }}>확인</button>
-          </div>
-        )}
-        </div>{/* fdf0cc body */}
-      </div>{/* popup wrap */}
-    </>
-  )
-}
-
-// ── 고정 펫 ──
-function PetCharFixed({ onOpen }) {
-  const [hov, setHov] = useState(false)
-  const [frame, setFrame] = useState(0)
-  useEffect(() => {
-    const t = setInterval(() => setFrame(f => (f + 1) % 6), 180)
-    return () => clearInterval(t)
-  }, [])
-  return (
-    <div onClick={onOpen} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
-      style={{ position:"fixed", bottom:20, right:20, zIndex:100, cursor:"pointer",
-               display:"flex", flexDirection:"column", alignItems:"center", userSelect:"none" }}>
-      {hov && (
-        <div style={{ position:"relative", marginBottom:4 }}>
-          <div style={{ background:"#F9E076", color:"#2a1a0a", fontSize:9, fontWeight:700,
-                        padding:"3px 10px", borderRadius:6,
-                        border:"2px solid #c89100", whiteSpace:"nowrap" }}>
-            포석호에게 질문하기 💬
-          </div>
-          <div style={{ position:"absolute", bottom:-5, left:"50%", transform:"translateX(-50%)",
-                        width:0, height:0, borderLeft:"5px solid transparent",
-                        borderRight:"5px solid transparent", borderTop:"5px solid #c89100" }} />
+      ) : (
+        <div style={{ textAlign:"center", padding:"20px 0" }}>
+          <div style={{ fontSize:40, marginBottom:12 }}>✅</div>
+          <div style={{ fontSize:16, fontWeight:700, marginBottom:8, color:"#2a1a0a" }}>복습 완료!</div>
+          <div style={{ fontSize:12, color:"#3a5a10", marginBottom:20, fontFamily:"monospace" }}>미뤄둔 퀴즈를 모두 풀었어요.</div>
+          <button onClick={onClose}
+            style={{ padding:"10px 32px", background:LIME_MAIN, border:`2px solid ${PIX}`,
+                     borderBottom:`4px solid ${PIX}`,
+                     boxShadow:`inset 0 2px 0 ${LIME_HI}`,
+                     color:"#2a1a0a", fontSize:13, fontWeight:700, cursor:"pointer",
+                     clipPath:pixClip, fontFamily:"monospace" }}>확인</button>
         </div>
       )}
-      <div style={{ transform: hov ? "translateY(-8px) scale(1.05)" : "none",
-                    transition:"transform 0.18s ease" }}>
-        <div style={{ textAlign:"center", fontSize:8, color:"#FFC107", fontWeight:700,
-                      background:"rgba(10,22,8,0.9)", padding:"1px 8px", borderRadius:4,
-                      border:"1px solid #6b3d1f", marginBottom:2 }}>포석호</div>
-        <div style={{ width:96, height:96,
-                      backgroundImage:`url(${LUMBERJACK_IMG})`,
-                      backgroundRepeat:"no-repeat",
-                      backgroundSize:`${384*1.5}px ${640*1.5}px`,
-                      backgroundPosition:`-${frame*64*1.5}px 0px`,
-                      imageRendering:"pixelated",
-                      filter: hov ? "drop-shadow(0 0 8px rgba(200,144,10,0.7))" : "drop-shadow(0 4px 8px rgba(0,0,0,0.5))",
-                      transition:"filter 0.18s" }} />
-      </div>
-    </div>
-  )
-}
-
-// ── 펫 팝업 (질문 전용) ──
-function PetPopup({ onClose, sessionId }) {
-  const [messages, setMessages] = useState([
-    { type:"npc", text:"안녕하세요! 궁금한 게 있으면 물어보세요 😊\n퀴즈는 강의 종료 후 자동으로 시작돼요!" }
-  ])
-  const [input, setInput]     = useState("")
-  const [loading, setLoading] = useState(false)
-  const chatRef               = useRef(null)
-
-  async function sendMsg() {
-    if (!input.trim() || loading) return
-    const txt = input.trim(); setInput("")
-    setMessages(prev => [...prev, { type:"user", text:txt }]); setLoading(true)
-    try {
-      const res = await generateQuiz({ session_id: sessionId, question: txt })
-      setMessages(prev => [...prev, { type:"npc", text: res.data.question ?? "(더미) 좋은 질문이에요!" }])
-    } catch { setMessages(prev => [...prev, { type:"npc", text:"(더미 응답) 네, 이해했어요!" }]) }
-    finally { setLoading(false); if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight }
-  }
-
-  return (
-    <>
-      <div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.65)", zIndex:200 }} />
-      <div style={{ position:"fixed", top:"50%", left:"50%", transform:"translate(-50%,-50%)",
-                    background:"#F9E076", border:"4px solid #c89100", borderBottom:"6px solid #895129", borderRadius:10, padding:0,
-                    zIndex:201, width:"min(440px,92vw)", maxHeight:"80vh", overflowY:"auto" }}>
-        <div style={{ background:"linear-gradient(180deg,#F9E076,#e8c550)", padding:"10px 16px",
-                      borderBottom:"3px solid #c89100", display:"flex", alignItems:"center" }}>
-          <span style={{ fontSize:13, fontWeight:700, color:"#2a1a0a", textShadow:"none" }}>
-            🐻‍❄️ 포석호에게 질문하기
-          </span>
-          <button onClick={onClose}
-            style={{ marginLeft:"auto", background:"#895129", border:"2px solid #6b3d1f",
-                     borderBottom:"3px solid #2a1a0a", borderRadius:4, width:22, height:22,
-                     color:"#F9E076", fontSize:11, fontWeight:700, cursor:"pointer",
-                     display:"flex", alignItems:"center", justifyContent:"center" }}>✕</button>
-        </div>
-        <div style={{ background:"#FFFDD0", padding:"14px" }}>
-        <div ref={chatRef}
-          style={{ height:180, overflowY:"auto", display:"flex", flexDirection:"column", gap:6,
-                   marginBottom:10, borderTop:"1px solid #e8c550", paddingTop:10 }}>
-          {messages.map((m,i) => (
-            <div key={i} style={{ display:"flex", justifyContent: m.type==="user" ? "flex-end" : "flex-start", alignItems:"flex-end", gap:4 }}>
-              {m.type==="npc" && <span style={{ fontSize:14, flexShrink:0 }}>🐻‍❄️</span>}
-              <div style={{ maxWidth:"78%", padding:"7px 11px", borderRadius:10, fontSize:12, lineHeight:1.5,
-                             background: m.type==="user" ? "#c89100" : "#fff4a0",
-                             color: m.type==="user" ? "#FFFDD0" : "#2a1a0a" }}>{m.text}</div>
-            </div>
-          ))}
-          {loading && <div style={{ fontSize:11, color:"#c89100", paddingLeft:22 }}>입력 중...</div>}
-        </div>
-        <div style={{ display:"flex", gap:6 }}>
-          <input value={input} onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key==="Enter" && sendMsg()} placeholder="궁금한 것을 물어보세요..." disabled={loading}
-            style={{ flex:1, background:"#FFFDD0", border:"2px solid #c89100", borderRadius:6,
-                     padding:"8px 12px", color:"#2a1a0a", fontSize:12, outline:"none", opacity:loading?0.6:1 }} />
-          <button onClick={sendMsg} disabled={loading}
-            style={{ background:"linear-gradient(180deg,#c89100,#895129)", border:"2px solid #c89100",
-                     borderBottom:"3px solid #895129", borderRadius:6, padding:"8px 16px",
-                     fontWeight:700, cursor:loading?"not-allowed":"pointer", fontSize:12,
-                     color:"#FFFDD0", opacity:loading?0.6:1 }}>전송</button>
-        </div>
-        </div>{/* fdf0cc body */}
-      </div>{/* popup wrap */}
-    </>
+    </LecturePopup>
   )
 }

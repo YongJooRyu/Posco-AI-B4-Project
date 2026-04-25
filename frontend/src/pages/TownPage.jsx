@@ -1,6 +1,14 @@
 import { useState, useEffect, useRef } from "react"
 import { useNavigate } from "react-router-dom"
-import SharedHeader from "../components/SharedHeader"
+import SharedHeader, {
+  PixelButton, PixelSquareButton, PixelCap, PixelBox, PixelBadge, PixelHeaderBar,
+  LEFT_CAP_PATTERN, RIGHT_CAP_PATTERN, BUTTON_PALETTE,
+  PIX, BODY_HI, BODY_MAIN, BODY_DARK,
+  LIME_HI, LIME_MAIN, LIME_DARK,
+  AMBER_MAIN,
+  COLOR_TEXT, COLOR_TEXT_SUB,
+  pixClip, pixClipSm, bodyGrad, limeGrad, sideShadow,
+} from "../components/SharedHeader"
 import { getReviewQueue } from "../api/index.js"
 
 // ── Cute Fantasy 에셋 경로 ──
@@ -9,11 +17,15 @@ const A   = "/assets/Cute_Fantasy"         // 유료
 const OD  = `${A}/Outdoor decoration`      // 공백 있는 폴더
 const UI   = "/assets/Cute_Fantasy_UI/UI"
 
-const PLAYER_SHEET  = `${A}/Player/Player.png`
+const PLAYER_SHEET  = `${A}/Player/lee.png`
 const INN_IMG       = `${A}/Buildings/Buildings/Unique_Buildings/Inn/Inn_Blue.png`
-const FARMER_NPC    = `${A}/NPCs (Premade)/Farmer_Bob.png`
+const HAN_NPC       = `${A}/Player/han.png`
 const CHEF_NPC      = `${A}/Player/ponix.png`
 const LUMBERJACK_NPC= `${A}/Player/popo.png`
+const JO_NPC        = `${A}/Player/jo.png`
+const KIM_NPC       = `${A}/Player/kim.png`
+const NAM_NPC       = `${A}/Player/nam.png`
+const RYU_NPC       = `${A}/Player/ryu.png`
 const OAK_BIG       = `${A}/Trees/Big_Oak_Tree.png`
 const OAK_MED       = `${A}/Trees/Medium_Oak_Tree.png`
 const BIRCH_BIG     = `${A}/Trees/Big_Birch_Tree.png`
@@ -50,10 +62,9 @@ function PixelIcon({ sx, sy, scale=2, style={} }) {
     }} />
   )
 }
-// ── Player 스프라이트 행 (32px 단위) ──
-// row0=대기, row1=오른쪽 대기, row2=위쪽 대기
-// row3=아래 이동, row4=오른쪽 이동, row5=위쪽 이동
-// 왼쪽은 row1(대기)/row4(이동)을 scaleX(-1) 반전으로 재사용
+// ── Player 스프라이트 행 (64px 프레임 단위, 512×1280 시트) ──
+// row0=아래 idle, row1=오른쪽 idle, row2=위 idle
+// row3=아래 walk, row4=오른쪽 walk, row5=위 walk
 const DIR_ROW = {
   down:  { idle: 0, walk: 3, flip: false },
   up:    { idle: 2, walk: 5, flip: false },
@@ -62,7 +73,7 @@ const DIR_ROW = {
 }
 
 // ── 애니메이션 CSS ──
-// walk_right는 4프레임, 나머지는 6프레임
+// 6프레임 × 96px(64px × 1.5scale) = 576px 이동
 const WALK_ANIM_CSS = `
 @keyframes walkFrames {
   0%         { background-position-x: 0px; }
@@ -72,6 +83,10 @@ const WALK_ANIM_CSS = `
   66.666%    { background-position-x: -384px; }
   83.333%    { background-position-x: -480px; }
   100%       { background-position-x: 0px; }
+}
+@keyframes idleFrames {
+  from { background-position-x: 0px; }
+  to   { background-position-x: -576px; }
 }
 @keyframes idleBob {
   0%,100% { transform: translateY(0px); }
@@ -242,7 +257,7 @@ function TomatoFarm({ innerCols = 4, innerRows = 3, children, onClick }) {
 
       {/* 레이블 */}
       <div style={{ position:"absolute", bottom:-22, left:"50%", transform:"translateX(-50%)",
-                    background:"rgba(0,0,0,0.85)", color:"#FFC107", fontSize:9, fontWeight:700,
+                    background:"rgba(0,0,0,0.85)", color:AMBER_MAIN, fontSize:9, fontWeight:700,
                     padding:"2px 8px", borderRadius:6, border:"1px solid #6b3d1f",
                     whiteSpace:"nowrap", zIndex:10 }}>🍅 토마토 농장</div>
 
@@ -287,7 +302,7 @@ function TomatoFarm({ innerCols = 4, innerRows = 3, children, onClick }) {
       <div style={{ position:"absolute", left:0, top:2*T, width:T, height:innerH, zIndex:3,
                     ...fenceTile(0, 16) }} />
       <div style={{ position:"absolute", left:0, top:3*T, width:T, height:innerH, zIndex:3,
-                    ...fenceTile(0, 32) }} />\
+                    ...fenceTile(0, 32) }} />
       <div style={{ position:"absolute", left:(innerCols+1)*T, top:T, width:T, height:innerH, zIndex:3,
                     ...fenceTile(0, 16),transform:"scaleX(-1)" }} />
       <div style={{ position:"absolute", left:(innerCols+1)*T, top:2*T, width:T, height:innerH, zIndex:3,
@@ -416,9 +431,59 @@ function WanderingAnimal({ src, sheetW, sheetH, frameSize, animRow, numFrames, a
 
 // NPC 스프라이트 (64x64 per frame, 6열)
 // scale=1.5 → 화면 96x96px (플레이어와 동일)
-function NpcSprite({ src, sheetW, sheetH, name, hasNotif, onClick, style={}, scale=3.0, nameMt=4, bubbleOffset=-52 }) {
+// NpcSprite — 512×1280 시트 사용
+// 행 매핑:
+//   0: idle down  / 1: idle right / 2: idle up
+//   3: walk down  / 4: walk right / 5: walk up
+//   left = right 행 가로 flip
+// dir: "down" | "up" | "left" | "right"
+// animated: true면 6프레임 순환 애니메이션 (idle 행이든 walk 행이든)
+// walking: true면 walk 행 (3/4/5) 사용, false면 idle 행 (0/1/2) 사용
+function NpcSprite({ src, sheetW, sheetH, name, hasNotif, onClick, style={},
+                     scale=3.0, nameMt=4, bubbleOffset=-52,
+                     animated=false, walking=false,
+                     dir="down" }) {
   const SC = scale
   const [hov, setHov] = useState(false)
+
+  const isLargeSheet = (sheetW === 512 && sheetH === 1280)
+
+  // 행 인덱스 결정
+  let rowIdx = 0
+  let flip = false
+  if (isLargeSheet) {
+    const effectiveDir = dir === "left" ? "right" : dir
+    if (walking) {
+      // walk: 행 3 (down) / 4 (right) / 5 (up)
+      if      (effectiveDir === "right") rowIdx = 4
+      else if (effectiveDir === "up")    rowIdx = 5
+      else                                rowIdx = 3
+    } else {
+      // idle: 행 0 (down) / 1 (right) / 2 (up)
+      if      (effectiveDir === "right") rowIdx = 1
+      else if (effectiveDir === "up")    rowIdx = 2
+      else                                rowIdx = 0
+    }
+    if (dir === "left") flip = true
+  }
+  const bgY = rowIdx * 64
+
+  // 6프레임 순환 애니메이션 — idle/walk 모두 같은 keyframe (background-position-x 0 → -6*64*SC)
+  const animName = animated && isLargeSheet ? "leeFrames" :
+                   animated /* 작은 시트 */ ? "idleFrames" : null
+
+  const spriteAnim = animName
+    ? `${animName} 0.9s steps(6) infinite, idleBob 1.5s ease-in-out infinite`
+    : "idleBob 1.5s ease-in-out infinite"
+
+  // 큰 시트용 keyframe (scale 반영)
+  const walkKeyframes = isLargeSheet && animated ? `
+    @keyframes leeFrames {
+      from { background-position-x: 0px; }
+      to   { background-position-x: -${6 * 64 * SC}px; }
+    }
+  ` : ""
+
   return (
     <div onClick={onClick}
       onMouseEnter={() => setHov(true)}
@@ -430,22 +495,25 @@ function NpcSprite({ src, sheetW, sheetH, name, hasNotif, onClick, style={}, sca
         transition:"transform 0.18s ease", userSelect:"none",
         ...style,
       }}>
+      <style>{WALK_ANIM_CSS + walkKeyframes}</style>
       {hasNotif && <NotifBadge topOffset={bubbleOffset} />}
       <div style={{
         width: 64*SC, height: 64*SC,
         backgroundImage: `url("${src}")`,
         backgroundRepeat: "no-repeat",
         backgroundSize: `${sheetW*SC}px ${sheetH*SC}px`,
-        backgroundPosition: "0px 0px",
+        backgroundPosition: `0px -${bgY*SC}px`,
         imageRendering: "pixelated",
-        animation: "idleBob 1.5s ease-in-out infinite",
+        animation: spriteAnim,
+        transform: flip ? "scaleX(-1)" : "none",
       }} />
       {name && (
         <div style={{
           marginTop: nameMt,
-          background: "rgba(0,0,0,0.85)", color: "#FFFDD0",
-          fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 8,
-          border: "1px solid #6b3d1f", whiteSpace: "nowrap", zIndex: 10,
+          background: "#1a1206", color: "#FFFDD0",
+          fontSize: 9, fontWeight: 700, padding: "2px 8px",
+          border: `2px solid ${PIX}`, whiteSpace: "nowrap", zIndex: 10,
+          clipPath: pixClipSm, fontFamily: "monospace",
         }}>{name}</div>
       )}
     </div>
@@ -484,67 +552,81 @@ function NameTag({ name, isMe=false }) {
   return (
     <div style={{
       position:"absolute", bottom:-10, left:"50%", transform:"translateX(-50%)",
-      background: isMe ? "#FFC107" : "rgba(0,0,0,0.85)",
+      background: isMe ? AMBER_MAIN : "#1a1206",
       color: isMe ? "#2a1a0a" : "#FFFDD0",
-      fontSize:9, fontWeight:700, padding:"2px 8px", borderRadius:8,
-      border: isMe ? "1px solid #c89100" : "1px solid #6b3d1f",
+      fontSize:9, fontWeight:700, padding:"2px 8px",
+      border: `2px solid ${PIX}`,
       whiteSpace:"nowrap", zIndex:10,
-      boxShadow: isMe ? "0 0 10px rgba(245,197,24,0.5)" : "none",
+      clipPath: pixClipSm, fontFamily:"monospace",
     }}>{name}</div>
   )
 }
 
 // 내 캐릭터 — 방향키 이동 + 4방향 walk 애니메이션 (96x96px 고정)
 function MyChar({ name, burningBubble, dir="down", isWalking=false }) {
+  const SC = 2.5  // NPC와 동일 사이즈 (이전 1.5 → 2.5로 키움)
   const { flip } = DIR_ROW[dir]
   const row = DIR_ROW[dir][isWalking ? "walk" : "idle"]
-  const bgY = -(row * 96)   // 32px * 3scale = 96px per row
+  const bgY = -(row * 64 * SC)   // 64px × scale per row
+
+  // walk 애니메이션 keyframe (6프레임 × 64*SC px 간격) — scale에 맞춰 inline 정의
+  const walkKf = `
+    @keyframes myCharWalk {
+      from { background-position-x: 0px; }
+      to   { background-position-x: -${6 * 64 * SC}px; }
+    }
+  `
 
   return (
     <div style={{ position:"relative", display:"inline-flex",
                   flexDirection:"column", alignItems:"center", userSelect:"none" }}>
-      <style>{WALK_ANIM_CSS}</style>
+      <style>{WALK_ANIM_CSS + walkKf}</style>
 
       {/* Burning Time 버블 */}
       {burningBubble && (
         <div style={{ position:"absolute", bottom:"100%", left:"50%",
                       transform:"translateX(-50%)", marginBottom:10, zIndex:20,
                       whiteSpace:"nowrap" }}>
-          <div style={{ background:"rgba(13,26,46,0.96)", border:"2px solid #FFC107",
-                        borderRadius:10, padding:"8px 14px",
-                        boxShadow:"0 4px 20px rgba(0,0,0,0.6)" }}>
-            <div style={{ fontSize:10, color:"#FFC107", fontWeight:800, marginBottom:6 }}>
+          <div style={{
+            background:"#1a0e06",
+            border:"2px solid #3f2832",
+            boxShadow:"inset 0 2px 0 #2e1a0e, inset 0 -2px 0 #000, 0 4px 16px rgba(0,0,0,0.7)",
+            padding:"8px 12px", minWidth:130,
+            clipPath:"polygon(3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px),0 3px)",
+          }}>
+            <div style={{ fontSize:10, color:"#feae34", fontWeight:800, marginBottom:6,
+                          fontFamily:"monospace", textShadow:"1px 1px 0 rgba(0,0,0,0.6)" }}>
               🔥 Burning Time
             </div>
-            <div style={{ display:"flex", justifyContent:"space-between", gap:24, marginBottom:3 }}>
-              <span style={{ fontSize:9, color:"#888" }}>공부시간</span>
-              <span style={{ fontSize:12, color:"#FFC107", fontWeight:700,
+            <div style={{ display:"flex", justifyContent:"space-between", gap:24, marginBottom:4 }}>
+              <span style={{ fontSize:9, color:COLOR_TEXT_SUB, fontFamily:"monospace" }}>공부시간</span>
+              <span style={{ fontSize:11, color:"#feae34", fontWeight:700,
                              fontFamily:"monospace" }}>{burningBubble.studyTime}</span>
             </div>
             <div style={{ display:"flex", justifyContent:"space-between", gap:24 }}>
-              <span style={{ fontSize:9, color:"#888" }}>집중시간</span>
-              <span style={{ fontSize:12, color:"#FFC107", fontWeight:700,
+              <span style={{ fontSize:9, color:COLOR_TEXT_SUB, fontFamily:"monospace" }}>집중시간</span>
+              <span style={{ fontSize:11, color:"#feae34", fontWeight:700,
                              fontFamily:"monospace" }}>{burningBubble.focusTime}</span>
             </div>
           </div>
           <div style={{ position:"absolute", bottom:-7, left:"50%", transform:"translateX(-50%)",
                         width:0, height:0, borderLeft:"6px solid transparent",
-                        borderRight:"6px solid transparent", borderTop:"8px solid #FFC107" }} />
+                        borderRight:"6px solid transparent", borderTop:"8px solid #3f2832" }} />
         </div>
       )}
 
       <NameTag name={name} isMe />
 
       <div style={{
-        width: 96, height: 96,
+        width: 64*SC, height: 64*SC,
         backgroundImage: `url("${PLAYER_SHEET}")`,
         backgroundRepeat: "no-repeat",
-        backgroundSize: `${192*3}px ${320*3}px`,
-        backgroundPositionY: `${bgY}px`,
+        backgroundSize: `${512*SC}px ${1280*SC}px`,
+        backgroundPosition: `0px ${bgY}px`,
         imageRendering: "pixelated",
-        animation: isWalking
-          ? "walkFrames 0.6s steps(1) infinite"
-          : "idleBob 1.5s ease-in-out infinite",
+        // walk 시: walk 행에서 6프레임 순환 (다리 움직임)
+        // idle 시: idle 행 첫 프레임 정지
+        animation: isWalking ? "myCharWalk 0.5s steps(6) infinite" : "none",
         transform: flip ? "scaleX(-1)" : "none",
       }} />
     </div>
@@ -654,9 +736,9 @@ export default function TownPage() {
   const navigate = useNavigate()
 
   // ── 캐릭터 이동 state ──
-  const [charPos,    setCharPos]    = useState({ x: 50, y: 44 })  // % 단위 — 메인 길 위
-  const [charDir,    setCharDir]    = useState("down")
-  const [isWalking,  setIsWalking]  = useState(false)
+  const [charPos,   setCharPos]   = useState({ x: 50, y: 44 })
+  const [charDir,   setCharDir]   = useState("down")
+  const [isWalking, setIsWalking] = useState(false)
   const keysRef = useRef({})
   const animRef = useRef(null)
 
@@ -717,7 +799,6 @@ export default function TownPage() {
         .filter(([k]) => keysRef.current[k])
       
       if (pressed.length > 0) {
-        // 마지막으로 누른 방향 기준
         const [, { dir, dx, dy }] = pressed[pressed.length - 1]
         setCharDir(dir)
         setIsWalking(true)
@@ -843,7 +924,6 @@ export default function TownPage() {
         {[
           { src:OAK_BIG,   sx:64,  sw:192, sh:80, fw:64, fh:80, scale:2.0, left:"1%",  top:"63%" },
           { src:OAK_MED,   sx:32,  sw:96,  sh:48, fw:32, fh:48, scale:2.5, left:"8%",  top:"67%" },
-          { src:OAK_BIG,   sx:64,  sw:192, sh:80, fw:64, fh:80, scale:2.2, left:"16%", top:"62%" },
           { src:BIRCH_BIG, sx:32,  sw:96,  sh:80, fw:32, fh:80, scale:2.0, left:"26%", top:"66%" },
           { src:OAK_MED,   sx:64,  sw:96,  sh:48, fw:32, fh:48, scale:2.5, left:"36%", top:"63%" },
           { src:OAK_BIG,   sx:64,  sw:192, sh:80, fw:64, fh:80, scale:2.1, left:"46%", top:"67%" },
@@ -973,7 +1053,7 @@ export default function TownPage() {
           ))
         })()}
 
-        {/* ══ Inn 교실 건물 ══ */}
+        {/* ══ 교실 건물 ══ */}
         <div onClick={() => { setNotifs(p=>({...p,teacher:false})); navigate("/lecture") }}
           onMouseEnter={e=>e.currentTarget.style.transform="translateY(-4px)"}
           onMouseLeave={e=>e.currentTarget.style.transform="none"}
@@ -990,11 +1070,10 @@ export default function TownPage() {
           </div>
         </div>
 
-        {/* ══ NPC — 한원석 교수님 (Farmer Bob) — 길 위, 왼쪽 ══ */}
-        <NpcSprite src={FARMER_NPC} sheetW={384} sheetH={832}
+        {/* ══ NPC — 한원석 교수님 — 길 위, 왼쪽 ══ */}
+        <NpcSprite src={HAN_NPC} sheetW={512} sheetH={1280} scale={2.5} animated dir="down"
           name="한원석 교수님" hasNotif={notifs.quest}
           onClick={() => openNpc("quest","quest")}
-          nameMt={-44}
           style={{ position:"absolute", left:"18%", top:"38%", zIndex:6 }} />
 
         {/* ══ NPC — 실습 조교님 (Chef Chloe) — 길 위, 중앙 ══ */}
@@ -1018,6 +1097,15 @@ export default function TownPage() {
           bubbleOffset={-84}
           style={{ position:"absolute", left:"62%", top:"38%", zIndex:6 }} />
 
+        {/* ══ 장식용 NPC 4명 (기능 없음, idle 첫 행만 표시) ══ */}
+        <NpcSprite src={JO_NPC} sheetW={512} sheetH={1280} scale={2.5} animated dir="down"
+          name="아름" style={{ position:"absolute", left:"14%", top:"62%", zIndex:6 }} />
+        <NpcSprite src={KIM_NPC} sheetW={512} sheetH={1280} scale={2.5} animated dir="down"
+          name="영환이" style={{ position:"absolute", left:"30%", top:"65%", zIndex:6 }} />
+        <NpcSprite src={NAM_NPC} sheetW={512} sheetH={1280} scale={2.5} animated dir="down"
+          name="효은" style={{ position:"absolute", left:"70%", top:"55%", zIndex:6 }} />
+        <NpcSprite src={RYU_NPC} sheetW={512} sheetH={1280} scale={2.5} animated dir="down"
+          name="용주" style={{ position:"absolute", left:"80%", top:"65%", zIndex:6 }} />
 
       </div>
 
@@ -1046,27 +1134,17 @@ export default function TownPage() {
 // ── 고정 버튼 ──
 
 function FixedBtn({ icon, label, onClick }) {
-  const [hov, setHov] = useState(false)
   return (
     <div onClick={onClick}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
       style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
                cursor: "pointer", userSelect: "none" }}>
-      <div style={{ width: 54, height: 54,
-                   background: hov ? "#c89100" : "#c89100",
-                   border: "3px solid #c89100",
-                   borderBottom: hov ? "3px solid #c89100" : "5px solid #6b3d1f",
-                   borderRadius: 10,
-                   display: "flex", alignItems: "center",
-                   justifyContent: "center",
-                   boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-                   transform: hov ? "translateY(2px)" : "none",
-                   transition: "transform 0.1s, border-bottom 0.1s" }}>
-        <PixelIcon sx={icon.sx} sy={icon.sy} scale={2} />
-      </div>
+      <PixelSquareButton onClick={onClick} variant="primary" scale={3}>
+        <div style={{ transform: "translateY(-4px)" }}>
+          <PixelIcon sx={icon.sx} sy={icon.sy} scale={1} />
+        </div>
+      </PixelSquareButton>
       {label && (
-        <span style={{ fontSize: 9, color: "#FFC107", fontWeight: 700,
+        <span style={{ fontSize: 9, color: AMBER_MAIN, fontWeight: 700,
                        textShadow: "0 1px 3px rgba(0,0,0,0.8)", whiteSpace: "nowrap" }}>
           {label}
         </span>
@@ -1097,28 +1175,31 @@ function MapleChar({ name, headEmoji, bodyColor, legColor, hasNotif, onClick, is
       {burningBubble && (
         <div style={{ position: "relative", marginBottom: 6 }}>
           <div style={{
-            background: "#2a1a0a", border: "2px solid #FFC107",
-            borderRadius: 10, padding: "7px 12px",
-            minWidth: 130, boxShadow: "0 0 12px rgba(245,197,24,0.25)",
+            background: "#1a0e06",
+            border: "2px solid #3f2832",
+            boxShadow: "inset 0 2px 0 #2e1a0e, inset 0 -2px 0 #000, 0 4px 16px rgba(0,0,0,0.7)",
+            padding: "8px 12px", minWidth: 130,
+            clipPath: "polygon(3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px),0 3px)",
           }}>
-            <div style={{ fontSize: 10, color: "#FFC107", fontWeight: 800,
-                          marginBottom: 5, letterSpacing: 0.5 }}>
+            <div style={{ fontSize: 10, color: "#feae34", fontWeight: 800,
+                          marginBottom: 5, fontFamily: "monospace",
+                          textShadow: "1px 1px 0 rgba(0,0,0,0.6)" }}>
               🔥 Burning Time
             </div>
             <div style={{ display: "flex", justifyContent: "space-between",
-                          alignItems: "center", marginBottom: 3 }}>
-              <span style={{ fontSize: 9, color: "#aaa" }}>공부시간</span>
+                          alignItems: "center", marginBottom: 4 }}>
+              <span style={{ fontSize: 9, color: COLOR_TEXT_SUB, fontFamily: "monospace" }}>공부시간</span>
               {/* 🔌 TODO: studyTime ← GET /api/user/today-stats */}
-              <span style={{ fontSize: 12, color: "#FFC107", fontWeight: 700,
+              <span style={{ fontSize: 11, color: "#feae34", fontWeight: 700,
                              fontFamily: "monospace" }}>
                 {burningBubble.studyTime}
               </span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between",
                           alignItems: "center" }}>
-              <span style={{ fontSize: 9, color: "#aaa" }}>집중시간</span>
+              <span style={{ fontSize: 9, color: COLOR_TEXT_SUB, fontFamily: "monospace" }}>집중시간</span>
               {/* 🔌 TODO: focusTime ← GET /api/user/today-stats */}
-              <span style={{ fontSize: 12, color: "#FFC107", fontWeight: 700,
+              <span style={{ fontSize: 11, color: "#feae34", fontWeight: 700,
                              fontFamily: "monospace" }}>
                 {burningBubble.focusTime}
               </span>
@@ -1129,7 +1210,7 @@ function MapleChar({ name, headEmoji, bodyColor, legColor, hasNotif, onClick, is
                         transform: "translateX(-50%)", width: 0, height: 0,
                         borderLeft: "6px solid transparent",
                         borderRight: "6px solid transparent",
-                        borderTop: "8px solid #FFC107" }} />
+                        borderTop: "8px solid #3f2832" }} />
         </div>
       )}
 
@@ -1148,11 +1229,11 @@ function MapleChar({ name, headEmoji, bodyColor, legColor, hasNotif, onClick, is
 
       {/* 이름 태그 */}
       <div style={{
-        background: isMe ? "#FFC107" : "rgba(0,0,0,0.78)",
+        background: isMe ? AMBER_MAIN : "#1a1206",
         color: isMe ? "#2a1a0a" : "#FFFDD0",
-        fontSize: tagSize, fontWeight: 700, padding: "2px 9px", borderRadius: 10, marginBottom: 5,
-        border: `1px solid ${isMe ? "#c89100" : "#6b3d1f"}`, whiteSpace: "nowrap",
-        boxShadow: isMe ? "0 0 10px rgba(245,197,24,0.35)" : "none",
+        fontSize: tagSize, fontWeight: 700, padding: "2px 9px", marginBottom: 5,
+        border: `2px solid ${PIX}`, whiteSpace: "nowrap",
+        clipPath: pixClipSm, fontFamily: "monospace",
       }}>{name}</div>
 
       {/* 캐릭터 */}
@@ -1180,29 +1261,23 @@ function QuestListPopup({ onClose, onSelectQuest }) {
   return (
     <PopupOverlay onClose={onClose} title="오늘의 퀘스트" icon="🧙">
       {QUEST_DETAILS.map(q => (
-        <div key={q.id} onClick={() => onSelectQuest(q)}
-          onMouseEnter={e => { e.currentTarget.style.background="#e8c550"; e.currentTarget.style.borderColor="#c89100" }}
-          onMouseLeave={e => { e.currentTarget.style.background="#FFFDD0"; e.currentTarget.style.borderColor="#F9E076" }}
-          style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
-                   padding: "11px 12px", marginBottom: 7, background: "#FFFDD0",
-                   borderRadius: 8, cursor: "pointer", border: "2px solid #F9E076",
-                   transition: "all 0.15s" }}>
+        <PixelBox key={q.id} color="lime" hoverable onClick={() => onSelectQuest(q)}
+                  pad={10}
+                  style={{ display: "flex", justifyContent: "space-between",
+                           alignItems: "center", marginBottom: 8 }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, color: "#2a1a0a" }}>{q.title}</div>
-            <div style={{ fontSize: 10, color: "#c89100", marginTop: 2 }}>{q.npc.emoji} {q.npc.name}</div>
+            <div style={{ fontSize: 10, color: COLOR_TEXT_SUB, marginTop: 2 }}>{q.npc.emoji} {q.npc.name}</div>
           </div>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-            <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 6, fontWeight: 700,
-                           background: q.status === "완료" ? "#fff4a0" : "#fff4a0",
-                           color: q.status === "완료" ? "#895129" : "#6b3d1f",
-                           border: q.status === "완료" ? "1px solid #F9E076" : "1px solid #c89100" }}>
+            <PixelBadge color={q.status === "완료" ? "green" : "lime"}>
               {q.status}
-            </span>
-            <span style={{ fontSize: 10, color: "#a86838" }}>
+            </PixelBadge>
+            <span style={{ fontSize: 10, color: COLOR_TEXT_SUB, fontWeight:700 }}>
               {q.progress.current}/{q.progress.total} {q.progress.unit}
             </span>
           </div>
-        </div>
+        </PixelBox>
       ))}
     </PopupOverlay>
   )
@@ -1214,70 +1289,70 @@ function QuestDetailPopup({ quest, onClose, navigate }) {
   const pct = Math.min(100, Math.round((quest.progress.current / quest.progress.total) * 100))
   return (
     <PopupOverlay onClose={onClose} wide title={quest.title} icon={quest.npc.emoji}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12,
-                    marginBottom: 16, paddingBottom: 14, borderBottom: "2px solid #F9E076" }}>
-        <div style={{ width: 60, height: 60, background: "#fff4a0", borderRadius: 10,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 34, border: "3px solid #c89100", flexShrink: 0 }}>
+      {/* 의뢰인 헤더 */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+        <PixelBox color="lime" pad={0} style={{ width: 60, height: 60,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 34, flexShrink: 0 }}>
           {quest.npc.emoji}
-        </div>
+        </PixelBox>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 10, color: "#c89100", marginBottom: 2 }}>퀘스트 의뢰인</div>
+          <div style={{ fontSize: 10, color: COLOR_TEXT_SUB, marginBottom: 2, fontWeight: 700 }}>퀘스트 의뢰인</div>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#2a1a0a" }}>{quest.npc.name}</div>
         </div>
-        <span style={{ fontSize: 11, padding: "4px 12px", borderRadius: 8, fontWeight: 700,
-                       background: quest.status === "완료" ? "#fff4a0" : "#fff4a0",
-                       color: quest.status === "완료" ? "#895129" : "#6b3d1f",
-                       border: quest.status === "완료" ? "2px solid #F9E076" : "2px solid #c89100" }}>
+        <PixelBadge color={quest.status === "완료" ? "green" : "lime"}>
           {quest.status}
-        </span>
+        </PixelBadge>
       </div>
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 13, color: "#2a1a0a", lineHeight: 1.75, marginBottom: 14,
-                      background: "#FFFDD0", borderRadius: 8, padding: 12,
-                      border: "1px solid #F9E076" }}>{quest.desc}</div>
+
+      {/* 설명 박스 + 진행바 */}
+      <div style={{ marginBottom: 14 }}>
+        <PixelBox color="white" pad={10} style={{ fontSize: 13, color: "#2a1a0a",
+                  lineHeight: 1.7, marginBottom: 12 }}>
+          {quest.desc}
+        </PixelBox>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11,
-                      color: "#c89100", marginBottom: 6 }}>
+                      color: COLOR_TEXT_SUB, marginBottom: 6, fontWeight: 700 }}>
           <span>진행률</span>
           <span>{quest.progress.current} / {quest.progress.total} {quest.progress.unit}</span>
         </div>
-        <div style={{ height: 14, background: "#F9E076", borderRadius: 7,
-                      overflow: "hidden", border: "2px solid #c89100" }}>
-          <div style={{ width: pct + "%", height: "100%", borderRadius: 5,
-                        background: quest.status === "완료"
-                          ? "linear-gradient(90deg,#F9E076,#c89100)"
-                          : "linear-gradient(90deg,#FFC107,#c89100)",
+        {/* 픽셀 진행바 */}
+        <PixelBox color="lime" pad={0} style={{ height: 16, padding: 2 }}>
+          <div style={{ width: pct + "%", height: "100%",
+                        background: quest.status === "완료" ? LIME_DARK : LIME_MAIN,
                         transition: "width 0.6s ease" }} />
-        </div>
-        <div style={{ fontSize: 10, color: "#c89100", marginTop: 4, textAlign: "right" }}>{pct}% 달성</div>
+        </PixelBox>
+        <div style={{ fontSize: 10, color: COLOR_TEXT_SUB, marginTop: 4, textAlign: "right",
+                      fontWeight: 700 }}>{pct}% 달성</div>
       </div>
-      <div style={{ background: "#fff4a0", borderRadius: 10, padding: 12,
-                    marginBottom: 16, border: "2px solid #c89100" }}>
-        <div style={{ fontSize: 11, color: "#6b3d1f", fontWeight: 700, marginBottom: 8 }}>🎁 보상</div>
+
+      {/* 보상 박스 */}
+      <PixelBox color="lime" pad={10} style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, color: "#2a1a0a", fontWeight: 700, marginBottom: 8 }}>🎁 보상</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {quest.rewards.map((r, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6,
-                                   background: "#FFFDD0", padding: "8px 12px",
-                                   borderRadius: 8, border: "2px solid #F9E076" }}>
+            <PixelBox key={i} color="white" pad={6}
+                      style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ fontSize: 20 }}>{r.emoji}</span>
               <div>
-                <div style={{ fontSize: 10, color: "#c89100" }}>{r.type}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "#c89100" }}>+{r.amount}</div>
+                <div style={{ fontSize: 10, color: COLOR_TEXT_SUB, fontWeight: 700 }}>{r.type}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: LIME_DARK }}>+{r.amount}</div>
               </div>
-            </div>
+            </PixelBox>
           ))}
         </div>
-      </div>
+      </PixelBox>
+
       <div style={{ display: "flex", gap: 8 }}>
-        <PixelBtn onClick={onClose} variant="secondary" style={{ flex: 1, padding: "10px 0" }}>닫기</PixelBtn>
+        <PixelBtn onClick={onClose} variant="secondary" style={{ flex: 1 }}>닫기</PixelBtn>
         {quest.location && (
-          <PixelBtn onClick={() => navigate(quest.location)} variant="secondary" style={{ flex: 1, padding: "10px 0" }}>
+          <PixelBtn onClick={() => navigate(quest.location)} variant="secondary" style={{ flex: 1 }}>
             바로이동
           </PixelBtn>
         )}
-        <PixelBtn onClick={onClose} variant="primary" style={{ flex: quest.location ? 1 : 2, padding: "10px 0" }}>
+        <PixelButton onClick={onClose} color="lime" scale={2.5} style={{ flex: quest.location ? 1 : 2, width: "100%" }}>
           수락하기
-        </PixelBtn>
+        </PixelButton>
       </div>
     </PopupOverlay>
   )
@@ -1289,27 +1364,26 @@ function SchedulePopup({ onClose, navigate }) {
   return (
     <PopupOverlay onClose={onClose} title="추천 일정표" icon="📅">
       {SCHEDULE.map((s, i) => (
-        <div key={i} style={{ display: "flex", justifyContent: "space-between",
-                               alignItems: "center", fontSize: 13,
-                               padding: "10px 12px", marginBottom: 6,
-                               background: "#FFFDD0", borderRadius: 8,
-                               border: "2px solid #F9E076" }}>
-          <span style={{ color: "#c89100", fontWeight: 700, minWidth: 52 }}>{s.time}</span>
-          <span style={{ flex: 1, marginLeft: 12, color: "#2a1a0a", fontWeight: 600 }}>{s.subject}</span>
+        <PixelBox key={i} color="white" pad={8}
+                  style={{ display: "flex", justifyContent: "space-between",
+                           alignItems: "center", fontSize: 13, marginBottom: 6 }}>
+          <span style={{ color: COLOR_TEXT_SUB, fontWeight: 700, minWidth: 56,
+                         fontFamily: "monospace" }}>{s.time}</span>
+          <span style={{ flex: 1, marginLeft: 12, color: "#2a1a0a", fontWeight: 700 }}>{s.subject}</span>
           <button
             onClick={() => { onClose(); navigate("/lecture") }}
-            style={{ color: "#c89100", cursor: "pointer", fontSize: 12,
+            style={{ color: COLOR_TEXT_SUB, cursor: "pointer", fontSize: 11,
                      background: "none", border: "none", padding: "2px 4px",
                      fontWeight: 700 }}>
             이동 →
           </button>
-        </div>
+        </PixelBox>
       ))}
     </PopupOverlay>
   )
 }
 
-// ── 팝업: 펫 (질문하기 + 복습 큐 연동) ──
+// ── 팝업: 펫 (재출제 + 복습 큐) ──
 
 const LLM_BASE = "http://localhost:8001"
 
@@ -1320,12 +1394,12 @@ function PetPopup({ onClose, reviewQueue = [] }) {
   const [retryDone,    setRetryDone]    = useState(false)
   const [retryLoading, setRetryLoading] = useState(true)
 
-  // 복습 큐 있으면 바로 복습 모드, 없으면 질문 모드
-  const [mode, setMode]         = useState(reviewQueue.length > 0 ? "review" : "question")
+  // 복습 큐 있으면 복습 모드, 없으면 재출제 모드
+  const [mode, setMode]         = useState(reviewQueue.length > 0 ? "review" : "retry")
   const [messages, setMessages] = useState(() =>
     reviewQueue.length > 0
       ? [{ type:"npc", text:`미뤄둔 퀴즈가 ${reviewQueue.length}개 있어요! 지금 풀어볼까요? 😊` }]
-      : [{ type:"npc", text:"안녕하세요! 🐻‍❄️ 궁금한 것을 물어보세요!" }]
+      : [{ type:"npc", text:"안녕하세요! 🐻‍❄️ 재출제할 문제를 가져올게요." }]
   )
   const [input, setInput]       = useState("")
   const [loading, setLoading]   = useState(false)
@@ -1344,25 +1418,38 @@ function PetPopup({ onClose, reviewQueue = [] }) {
       .catch(() => setRetryLoading(false))
   }, [])
 
+  // 재출제 모드 + 큐 있으면 자동 LLM 세션 시작 (탭 클릭 없이)
+  useEffect(() => {
+    if (mode !== "retry" || retryLoading || retryQueue.length === 0) return
+    if (messages.length > 1) return  // 이미 시작된 경우 skip
+    const item = retryQueue[0]
+    if (!item) return
+    setLoading(true)
+    const levelMsg = item.retry_level === "hard" ? "많이 어려웠던"
+                   : item.retry_level === "medium" ? "조금 헷갈렸던" : "거의 다 알았던"
+    fetch(`${LLM_BASE}/api/chat`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        lecture_filename: item.lecture_title.includes("생명") ? "bio_1.json"
+                        : item.lecture_title.includes("지구") ? "ear_1.json" : "bio_1.json",
+        subject: item.lecture_title,
+        focus_timestamps: [],
+      }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        setMessages([{
+          type:"npc",
+          text: `${levelMsg} [${item.lecture_title}] 내용을 다시 복습해봐요! 점수: ${item.total}점 → 목표: 70점↑\n\n` +
+                (d.reply ?? "").replace(/\s*\[/g, "\n[")
+        }])
+      })
+      .catch(() => setMessages([{ type:"npc", text:`[${item.lecture_title}] 내용 복습 시작해봐요!` }]))
+      .finally(() => setLoading(false))
+  }, [mode, retryLoading, retryQueue.length])
+
   function scrollBottom() {
     if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight
-  }
-
-  // 질문하기 모드
-  async function sendQuestion() {
-    if (!input.trim() || loading) return
-    const txt = input.trim(); setInput("")
-    setMessages(prev => [...prev, { type:"user", text:txt }]); setLoading(true)
-    try {
-      const res = await fetch(`${BASE}/quiz/generate`, {
-        method:"POST", headers:{ "Content-Type":"application/json", "X-User-Id":"1" },
-        body: JSON.stringify({ question: txt }),
-      })
-      const data = await res.json()
-      setMessages(prev => [...prev, { type:"npc", text: data.question ?? "(더미) 좋은 질문이에요! 같이 생각해봐요 😊" }])
-    } catch {
-      setMessages(prev => [...prev, { type:"npc", text:"(더미) 좋은 질문이에요! 같이 생각해봐요 😊" }])
-    } finally { setLoading(false); setTimeout(scrollBottom, 50) }
   }
 
   // 재출제 퀴즈 답변 (LLM 연결)
@@ -1462,111 +1549,80 @@ function PetPopup({ onClose, reviewQueue = [] }) {
     } finally { setLoading(false); setTimeout(scrollBottom, 50) }
   }
 
+  const pixelBubble = (isUser) => ({
+    maxWidth: "78%", padding: "7px 11px",
+    fontSize: 12, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word",
+    background: isUser ? LIME_MAIN : BODY_HI,
+    color: COLOR_TEXT,
+    border: `2px solid ${PIX}`,
+    clipPath: pixClip,
+  })
+
   return (
     <PopupOverlay onClose={onClose} wide title="포석호" icon="🐻‍❄️">
       {reviewQueue.length > 0 && !reviewDone && (
-        <div style={{ marginBottom: 10, background: "#fff4a0", border: "2px solid #c89100",
-                      borderRadius: 6, padding: "4px 12px", fontSize: 10,
-                      color: "#6b3d1f", fontWeight: 700, display: "inline-block" }}>
-          📝 복습 대기 {reviewQueue.length}개
+        <div style={{ marginBottom: 10 }}>
+          <PixelBadge color="lime">📝 복습 대기 {reviewQueue.length}개</PixelBadge>
         </div>
       )}
 
-      {/* 모드 탭 */}
-      <div style={{ display:"flex", gap:6, marginBottom:14, flexWrap:"wrap" }}>
-        <button style={{
-          flex:1, padding:"7px 0", fontSize:12, fontWeight:700, cursor:"pointer",
-          background: mode==="question" ? "#c89100" : "#F9E076",
-          color: mode==="question" ? "#FFFDD0" : "#c89100",
-          border: mode==="question" ? "2px solid #c89100" : "2px solid #F9E076",
-          borderBottom: mode==="question" ? "3px solid #c89100" : "2px solid #F9E076",
-          borderRadius:6,
-        }} onClick={() => setMode("question")}>
-          ❓ 질문하기
-        </button>
-        {reviewQueue.length > 0 && (
-          <button style={{
-            flex:1, padding:"7px 0", fontSize:12, fontWeight:700, cursor:"pointer",
-            background: mode==="review" ? "#c89100" : "#F9E076",
-            color: mode==="review" ? "#FFFDD0" : "#c89100",
-            border: mode==="review" ? "2px solid #c89100" : "2px solid #F9E076",
-            borderBottom: mode==="review" ? "3px solid #c89100" : "2px solid #F9E076",
-            borderRadius:6,
-          }} onClick={() => setMode("review")}>
-            📝 복습 ({reviewQueue.length})
-          </button>
-        )}
-        {!retryLoading && retryQueue.length > 0 && (
-          <button style={{
-            flex:1, padding:"7px 0", fontSize:12, fontWeight:700, cursor:"pointer",
-            background: mode==="retry" ? "#c42f1c" : "#fff0f0",
-            color: mode==="retry" ? "#FFFDD0" : "#9c1c0b",
-            border: mode==="retry" ? "2px solid #9c1c0b" : "2px solid #F9E076",
-            borderBottom: mode==="retry" ? "3px solid #2a1a0a" : "2px solid #F9E076",
-            borderRadius:6,
-          }} onClick={() => {
-            setMode("retry")
-            // 재출제 LLM 세션 시작
-            const item = retryQueue[0]
-            if (item && messages.length <= 1) {
-              setLoading(true)
-              const levelMsg = item.retry_level === "hard" ? "많이 어려웠던" : item.retry_level === "medium" ? "조금 헷갈렸던" : "거의 다 알았던"
-              fetch(`${LLM_BASE}/api/chat`, {
-                method:"POST", headers:{"Content-Type":"application/json"},
-                body: JSON.stringify({
-                  lecture_filename: item.lecture_title.includes("생명") ? "bio_1.json"
-                                  : item.lecture_title.includes("지구") ? "ear_1.json" : "bio_1.json",
-                  subject: item.lecture_title,
-                  focus_timestamps: [],
-                }),
-              })
-              .then(r => r.json())
-              .then(d => {
-                setMessages([{
-                  type:"npc",
-                  text:`${levelMsg} [${item.lecture_title}] 내용을 다시 복습해봐요! 점수: ${item.total}점 → 목표: 70점↑\n\n` +
-                       (d.reply??"").replace(/\s*\[/g,"\n[")
-                }])
-              })
-              .catch(() => setMessages([{ type:"npc", text:`[${item.lecture_title}] 내용 복습 시작해봐요!` }]))
-              .finally(() => setLoading(false))
-            }
-          }}>
-            🔥 재출제 ({retryQueue.length})
-          </button>
-        )}
-      </div>
+      {/* 모드 탭 — 복습/재출제 둘 다 있을 때만 표시 */}
+      {reviewQueue.length > 0 && !retryLoading && retryQueue.length > 0 && (
+        <div style={{ display:"flex", gap:6, marginBottom:14 }}>
+          {[["review","📝 복습"], ["retry","🔥 재출제"]].map(([m, label]) => (
+            <button key={m} onClick={() => setMode(m)} style={{
+              flex:1, padding:"8px 0", fontSize:12, fontWeight:700, cursor:"pointer",
+              fontFamily:"monospace", outline:"none",
+              background: mode===m ? LIME_MAIN : LIME_HI,
+              color: "#2a1a0a",
+              border: `2px solid ${PIX}`,
+              borderTop: `2px solid ${LIME_HI}`,
+              borderBottom: mode===m ? `4px solid ${PIX}` : `2px solid ${PIX}`,
+              boxShadow: `inset 0 2px 0 ${LIME_HI}`,
+            }}>
+              {label} ({m==="review" ? reviewQueue.length : retryQueue.length})
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 둘 다 없을 때 안내 */}
+      {reviewQueue.length === 0 && (!retryLoading && retryQueue.length === 0) && (
+        <div style={{ marginBottom: 14 }}>
+          <PixelBadge color="lime">
+            {retryLoading ? "재출제 문제를 불러오는 중..." : "복습/재출제 대기 항목이 없어요 🎉"}
+          </PixelBadge>
+        </div>
+      )}
 
       {/* 복습 모드 — 현재 문제 카드 */}
       {mode === "review" && !reviewDone && reviewQueue[current] && (
-        <div style={{ background:"#fff4a0", borderRadius:8, padding:"10px 14px",
-                      marginBottom:12, border:"2px solid #c89100" }}>
-          <div style={{ fontSize:10, color:"#6b3d1f", marginBottom:4, fontWeight:700 }}>
+        <PixelBox color="lime" pad={10} style={{ marginBottom: 12 }}>
+          <div style={{ fontSize:10, color:"#2a1a0a", marginBottom:4, fontWeight:700 }}>
             [{reviewQueue[current].subject}] — {current+1}/{reviewQueue.length}
           </div>
           <div style={{ fontSize:13, fontWeight:700, color:"#2a1a0a" }}>{reviewQueue[current].question}</div>
-        </div>
+        </PixelBox>
       )}
 
       {/* 재출제 현재 문제 카드 */}
       {mode === "retry" && !retryDone && retryQueue[retryIdx] && (
-        <div style={{ marginBottom:10, background:"#fff0f0", border:"2px solid #c42f1c",
-                      borderRadius:6, padding:"8px 12px", fontSize:11 }}>
-          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
-            <span style={{ color:"#9c1c0b", fontWeight:700 }}>
+        <PixelBox color="lime" pad={10} style={{ marginBottom: 10, fontSize: 11 }}>
+          <div style={{ display:"flex", justifyContent:"space-between",
+                        alignItems:"center", marginBottom:4 }}>
+            <span style={{ color:"#2a1a0a", fontWeight:700 }}>
               🔥 재출제 {retryIdx+1}/{retryQueue.length}
             </span>
-            <span style={{
-              fontSize:10, fontWeight:700, borderRadius:4, padding:"1px 7px",
-              background: retryQueue[retryIdx].retry_level==="hard" ? "#c42f1c"
-                        : retryQueue[retryIdx].retry_level==="medium" ? "#895129" : "#c89100",
-              color:"#FFFDD0",
-            }}>
-              {retryQueue[retryIdx].retry_level==="hard" ? "재학습" : retryQueue[retryIdx].retry_level==="medium" ? "부분보완" : "마무리"}
-            </span>
+            <PixelBadge color={retryQueue[retryIdx].retry_level==="hard" ? "red"
+                              : retryQueue[retryIdx].retry_level==="medium" ? "lime" : "green"}>
+              {retryQueue[retryIdx].retry_level==="hard" ? "재학습"
+                : retryQueue[retryIdx].retry_level==="medium" ? "부분보완" : "마무리"}
+            </PixelBadge>
           </div>
-          <div style={{ fontSize:12, color:"#2a1a0a" }}>{retryQueue[retryIdx].lecture_title}</div>
-          <div style={{ fontSize:11, color:"#9c1c0b", marginTop:4 }}>
+          <div style={{ fontSize:13, color:"#2a1a0a", fontWeight:700, marginTop:2 }}>
+            {retryQueue[retryIdx].lecture_title}
+          </div>
+          <div style={{ fontSize:11, color:COLOR_TEXT_SUB, marginTop:4, fontWeight:700 }}>
             이전 점수: <strong>{retryQueue[retryIdx].total}점</strong>
             {retryQueue[retryIdx].missing?.length > 0 && (
               <span style={{ marginLeft:8, fontSize:10 }}>
@@ -1574,13 +1630,13 @@ function PetPopup({ onClose, reviewQueue = [] }) {
               </span>
             )}
           </div>
-        </div>
+        </PixelBox>
       )}
       {mode === "retry" && retryDone && (
         <div style={{ textAlign:"center", padding:"12px 0", marginBottom:10 }}>
           <div style={{ fontSize:28, marginBottom:6 }}>🎉</div>
           <div style={{ fontSize:13, fontWeight:700, color:"#2a1a0a" }}>재출제 완료!</div>
-          <div style={{ fontSize:11, color:"#c89100" }}>모든 취약 항목을 복습했어요.</div>
+          <div style={{ fontSize:11, color:COLOR_TEXT_SUB }}>모든 취약 항목을 복습했어요.</div>
         </div>
       )}
 
@@ -1589,12 +1645,13 @@ function PetPopup({ onClose, reviewQueue = [] }) {
         <div style={{ textAlign:"center", padding:"16px 0", marginBottom:12 }}>
           <div style={{ fontSize:32, marginBottom:8 }}>✅</div>
           <div style={{ fontSize:14, fontWeight:700, color:"#2a1a0a", marginBottom:4 }}>복습 완료!</div>
-          <div style={{ fontSize:11, color:"#c89100" }}>미뤄둔 퀴즈를 모두 풀었어요.</div>
+          <div style={{ fontSize:11, color:COLOR_TEXT_SUB }}>미뤄둔 퀴즈를 모두 풀었어요.</div>
         </div>
       )}
 
       {/* 채팅 영역 */}
-      <div style={{ borderTop:"2px solid #F9E076", paddingTop:12 }}>
+      <div style={{ borderTop:`3px solid ${PIX}`, marginTop:4, paddingTop:12,
+                    boxShadow:"inset 0 2px 0 #b8d89a" }}>
         <div ref={chatRef}
           style={{ height: mode === "review" ? 160 : 220, overflowY:"auto", display:"flex",
                    flexDirection:"column", gap:6, marginBottom:10 }}>
@@ -1606,76 +1663,73 @@ function PetPopup({ onClose, reviewQueue = [] }) {
                                    alignItems:"flex-end", gap:4 }}>
               {m.type==="npc" && <span style={{ fontSize:14, flexShrink:0 }}>🐻‍❄️</span>}
               {m.type==="system" && (
-                <div style={{ fontSize:10, color:"#6b3d1f", background:"#F9E076",
-                              border:"1px solid #c89100", borderRadius:6, padding:"3px 10px" }}>{m.text}</div>
+                <PixelBadge color="lime">{m.text}</PixelBadge>
               )}
               {m.type==="score" && (
-                <div style={{ width:"90%", background:"#FFFDD0", border:"2px solid #c89100",
-                              borderRadius:8, padding:"8px 10px", fontSize:11 }}>
+                <PixelBox color="white" pad={8} style={{ width:"90%", fontSize:11 }}>
                   <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
-                    <span style={{ fontWeight:700, color:"#6b3d1f" }}>📊 이해도</span>
+                    <span style={{ fontWeight:700, color:"#2a1a0a" }}>📊 이해도</span>
                     <span style={{ fontSize:16, fontWeight:700,
-                                   color: m.total>=70?"#895129":m.total>=40?"#895129":"#c42f1c" }}>
+                                   color: m.total>=70?LIME_DARK:m.total>=40?LIME_MAIN:"#e43b44" }}>
                       {m.total}점
                     </span>
-                    <span style={{ fontSize:9, fontWeight:700, borderRadius:8, padding:"1px 6px",
-                                   background: m.match==="일치"?"#fff4a0":m.match==="부분일치"?"#F9E076":"#fff0f0",
-                                   color: m.match==="일치"?"#895129":m.match==="부분일치"?"#895129":"#c42f1c",
-                                   border:`1px solid ${m.match==="일치"?"#c89100":m.match==="부분일치"?"#c89100":"#d94040"}` }}>
+                    <span style={{ fontSize:9, fontWeight:700, padding:"2px 6px",
+                                   border:`2px solid ${PIX}`,
+                                   background: m.match==="일치"?LIME_HI:m.match==="부분일치"?LIME_HI+"99":"#fff0f0",
+                                   color: m.match==="일치"?"#2a4a08":m.match==="부분일치"?"#3a5a10":"#c42f1c" }}>
                       {m.match||"채점됨"}
                     </span>
                   </div>
                   {[{label:"개념",val:m.concept,max:40},{label:"정확",val:m.accuracy,max:40},{label:"구체",val:m.detail,max:20}].map(item=>(
                     <div key={item.label} style={{ marginBottom:4 }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, color:"#6b3d1f", marginBottom:1 }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", fontSize:9, color:COLOR_TEXT_SUB, marginBottom:1 }}>
                         <span>{item.label}</span><span>{item.val}/{item.max}</span>
                       </div>
-                      <div style={{ height:3, background:"#e8c550", borderRadius:2, overflow:"hidden" }}>
-                        <div style={{ width:`${(item.val/item.max)*100}%`, height:"100%", borderRadius:2,
-                                      background:item.val/item.max>=0.7?"#895129":item.val/item.max>=0.4?"#c89100":"#c42f1c" }} />
+                      <div style={{ height:4, background:LIME_HI, overflow:"hidden", border:`1px solid ${PIX}` }}>
+                        <div style={{ width:`${(item.val/item.max)*100}%`, height:"100%",
+                                      background:item.val/item.max>=0.7?LIME_DARK:item.val/item.max>=0.4?LIME_MAIN:"#e43b44" }} />
                       </div>
                     </div>
                   ))}
                   {(m.matched?.length>0||m.missing?.length>0) && (
                     <div style={{ display:"flex", flexWrap:"wrap", gap:3, marginTop:5 }}>
                       {m.matched?.slice(0,4).map(k=>(
-                        <span key={k} style={{ background:"#fff4a0",color:"#895129",border:"1px solid #c89100",
-                                               borderRadius:10,padding:"1px 5px",fontSize:9 }}>✓ {k}</span>
+                        <span key={k} style={{ background:LIME_HI, color:"#2a1a0a",
+                                               border:`2px solid ${PIX}`,padding:"1px 5px",fontSize:9 }}>✓ {k}</span>
                       ))}
                       {m.missing?.slice(0,3).map(k=>(
-                        <span key={k} style={{ background:"#fff0f0",color:"#c42f1c",border:"1px solid #d94040",
-                                               borderRadius:10,padding:"1px 5px",fontSize:9 }}>✗ {k}</span>
+                        <span key={k} style={{ background:"#fff0f0",color:"#c42f1c",
+                                               border:`2px solid ${PIX}`,padding:"1px 5px",fontSize:9 }}>✗ {k}</span>
                       ))}
                     </div>
                   )}
-                  {m.comment && <div style={{ marginTop:5,fontSize:10,color:"#6b3d1f",borderTop:"1px solid #e8c550",paddingTop:4 }}>💬 {m.comment}</div>}
-                </div>
+                  {m.comment && <div style={{ marginTop:5,fontSize:10,color:COLOR_TEXT_SUB,borderTop:`2px solid ${LIME_HI}`,paddingTop:4 }}>💬 {m.comment}</div>}
+                </PixelBox>
               )}
               {(m.type==="npc"||m.type==="user") && (
-                <div style={{ maxWidth:"78%", padding:"7px 11px", borderRadius:10,
-                               fontSize:12, lineHeight:1.5, whiteSpace:"pre-wrap", wordBreak:"break-word",
-                               background: m.type==="user" ? "#c89100" : "#FFFDD0",
-                               color: m.type==="user" ? "#FFFDD0" : "#2a1a0a",
-                               border: m.type==="user" ? "none" : "1px solid #F9E076" }}>
+                <div style={pixelBubble(m.type==="user")}>
                   {m.text}
                 </div>
               )}
             </div>
           ))}
-          {loading && <div style={{ fontSize:11, color:"#a86838", paddingLeft:22 }}>입력 중...</div>}
+          {loading && <div style={{ fontSize:11, color:COLOR_TEXT_SUB, paddingLeft:22 }}>입력 중...</div>}
         </div>
 
-        {!(reviewDone || (mode==="retry" && retryDone)) && (
+        {!(reviewDone || (mode==="retry" && retryDone)) && (mode==="review" || mode==="retry") && (
           <div style={{ display:"flex", gap:6 }}>
             <input value={input} onChange={e => setInput(e.target.value)}
-              onKeyDown={e => e.key==="Enter" && (mode==="review" ? sendReviewAnswer() : mode==="retry" ? sendRetryAnswer() : sendQuestion())}
-              placeholder={mode==="review" ? "답변을 입력하세요..." : "궁금한 것을 물어보세요..."}
+              onKeyDown={e => e.key==="Enter" && (mode==="review" ? sendReviewAnswer() : sendRetryAnswer())}
+              placeholder="답변을 입력하세요..."
               disabled={loading}
-              style={{ flex:1, background:"#FFFDD0", border:"2px solid #F9E076",
-                       borderRadius:8, padding:"8px 12px", color:"#2a1a0a",
-                       fontSize:12, outline:"none", opacity:loading?0.6:1 }} />
+              style={{
+                flex:1, background: BODY_HI, border:`2px solid ${PIX}`, borderRadius:0,
+                padding:"8px 12px", color: COLOR_TEXT, fontSize:12, outline:"none",
+                opacity:loading?0.6:1, fontFamily:"monospace",
+                clipPath: pixClip,
+              }} />
             <PixelBtn
-              onClick={mode==="review" ? sendReviewAnswer : mode==="retry" ? sendRetryAnswer : sendQuestion}
+              onClick={mode==="review" ? sendReviewAnswer : sendRetryAnswer}
               disabled={loading}>전송</PixelBtn>
           </div>
         )}
@@ -1691,23 +1745,19 @@ function InventoryPopup({ onClose }) {
     <PopupOverlay onClose={onClose} title="도감 (뱃지 모음집)" >
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
         {BADGES.map(b => (
-          <div key={b.id} style={{
-            display: "flex", flexDirection: "column", alignItems: "center",
-            padding: 12, borderRadius: 8, textAlign: "center",
-            background: b.earned ? "#FFFDD0" : "#FFFDD0",
-            border: b.earned ? "3px solid #c89100" : "2px solid #F9E076",
-            opacity: b.earned ? 1 : 0.5,
-          }}>
+          <PixelBox key={b.id} color={b.earned ? "white" : "gray"} pad={10}
+                    style={{ display: "flex", flexDirection: "column", alignItems: "center",
+                             textAlign: "center", opacity: b.earned ? 1 : 0.55 }}>
             <div style={{ fontSize: 28, marginBottom: 4,
                           filter: b.earned ? "none" : "grayscale(100%)" }}>{b.emoji}</div>
-            <div style={{ fontSize: 10, color: b.earned ? "#2a1a0a" : "#895129",
-                          fontWeight: b.earned ? 700 : 400 }}>{b.name}</div>
+            <div style={{ fontSize: 10, color: b.earned ? "#2a1a0a" : COLOR_TEXT_SUB,
+                          fontWeight: 700 }}>{b.name}</div>
             {b.earned && (
-              <div style={{ fontSize: 9, color: "#c89100", marginTop: 4, fontWeight: 700,
-                            background: "#fff4a0", border: "1px solid #c89100",
-                            borderRadius: 4, padding: "1px 6px" }}>획득!</div>
+              <div style={{ marginTop: 4 }}>
+                <PixelBadge color="green">획득!</PixelBadge>
+              </div>
             )}
-          </div>
+          </PixelBox>
         ))}
       </div>
     </PopupOverlay>
@@ -1715,37 +1765,61 @@ function InventoryPopup({ onClose }) {
 }
 
 // ── 픽셀아트 버튼 ──
+// 기존 PixelBtn 호출부 호환을 위해 PixelButton을 감싸는 wrapper
+// variant: primary(초록) | secondary(갈색) | danger(빨강)
 function PixelBtn({ children, onClick, variant = "primary", style = {}, disabled = false }) {
-  const [hov, setHov] = useState(false)
-  const colors = {
-    primary:   { bg: hov ? "#a86838" : "#c89100", border: "#c89100", shadow: "#6b3d1f", text: "#FFFDD0" },
-    secondary: { bg: hov ? "#F9E076" : "#F9E076", border: "#c89100", shadow: "#6b3d1f", text: "#2a1a0a" },
-    danger:    { bg: hov ? "#c42f1c" : "#c42f1c", border: "#9c1c0b", shadow: "#2a1a0a", text: "#fff0f0" },
-  }
-  const c = colors[variant] || colors.primary
+  // 호출자의 style 중 padding/height/border 같은 PixelButton 내부 구조를 깨는 속성은 제거
+  // 통과시킬 것: width-related (flex, width, minWidth, maxWidth), margin
+  const safeStyle = {}
+  if (style.flex !== undefined)      safeStyle.flex = style.flex
+  if (style.flexBasis !== undefined) safeStyle.flexBasis = style.flexBasis
+  if (style.width !== undefined)     safeStyle.width = style.width
+  if (style.minWidth !== undefined)  safeStyle.minWidth = style.minWidth
+  if (style.maxWidth !== undefined)  safeStyle.maxWidth = style.maxWidth
+  if (style.margin !== undefined)    safeStyle.margin = style.margin
+  if (style.marginLeft !== undefined)  safeStyle.marginLeft = style.marginLeft
+  if (style.marginRight !== undefined) safeStyle.marginRight = style.marginRight
+  if (style.marginTop !== undefined)   safeStyle.marginTop = style.marginTop
+  if (style.marginBottom !== undefined)safeStyle.marginBottom = style.marginBottom
+
   return (
-    <button onClick={onClick} disabled={disabled}
-      onMouseEnter={() => setHov(true)}
-      onMouseLeave={() => setHov(false)}
-      style={{
-        background: c.bg, border: `3px solid ${c.border}`,
-        borderBottom: `5px solid ${c.shadow}`,
-        borderRadius: 6, padding: "8px 16px",
-        color: c.text, fontWeight: 700, fontSize: 12,
-        cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.6 : 1,
-        transform: hov && !disabled ? "translateY(1px)" : "none",
-        transition: "transform 0.1s",
-        ...style,
-      }}>
+    <PixelButton
+      onClick={onClick}
+      variant={variant}
+      disabled={disabled}
+      scale={3}
+      fullWidth={style.flex !== undefined || style.width === "100%"}
+      style={safeStyle}
+    >
       {children}
-    </button>
+    </PixelButton>
   )
 }
 
-// ── 공통 팝업 오버레이 (밝은 픽셀아트 테마) ──
+// ── 공통 팝업 오버레이 (픽셀 박스 테마) ──
 
 function PopupOverlay({ children, onClose, wide, title, icon }) {
+  const px = 3
+
+  // 헤더 그라디언트 — 위 PIX 1px + main + 아래 dark (하단 PIX 제거: 본문 상단과 중복 방지)
+  const hdrBg = `linear-gradient(180deg,
+    ${PIX} 0, ${PIX} ${px}px,
+    ${LIME_MAIN} ${px}px, ${LIME_MAIN} calc(100% - ${px}px),
+    ${LIME_DARK} calc(100% - ${px}px), ${LIME_DARK} 100%)`
+  const hdrClipPath = `polygon(
+    ${px}px 0, calc(100% - ${px}px) 0,
+    100% ${px}px, 100% 100%,
+    0 100%, 0 ${px}px
+  )`
+
+  // body 좌하/우하만 픽셀 컷
+  const bodyClipPath = `polygon(
+    0 0, 100% 0,
+    100% calc(100% - ${px}px), calc(100% - ${px}px) calc(100% - ${px}px),
+    calc(100% - ${px}px) 100%, ${px}px 100%,
+    ${px}px calc(100% - ${px}px), 0 calc(100% - ${px}px)
+  )`
+
   return (
     <>
       <div onClick={onClose}
@@ -1757,44 +1831,51 @@ function PopupOverlay({ children, onClose, wide, title, icon }) {
         width: wide ? "min(560px,94vw)" : "min(430px,94vw)",
         maxHeight: "90vh",
         display: "flex", flexDirection: "column",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
       }}>
+        {/* 헤더 — 인라인 픽셀 스타일 */}
         <div style={{
-          background: "#F9E076",
-          border: "4px solid #c89100",
-          borderBottom: "6px solid #c89100",
-          borderRadius: 10,
-          overflow: "hidden",
-          boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+          background: hdrBg,
+          boxShadow: sideShadow,
+          padding: `${px*3}px ${px*4}px`,
+          minHeight: 28,
+          display: "flex", alignItems: "center", gap: 8,
+          clipPath: hdrClipPath,
         }}>
-          {/* 헤더 */}
-          <div style={{
-            background: "linear-gradient(180deg, #F9E076 0%, #e8c550 100%)",
-            borderBottom: "3px solid #c89100",
-            padding: "10px 16px",
-            display: "flex", alignItems: "center", gap: 8,
-          }}>
-            {icon && <span style={{ fontSize: 18 }}>{icon}</span>}
-            <span style={{
-              fontSize: 14, fontWeight: 700, color: "#2a1a0a",
-              flex: 1, textShadow: "none",
-            }}>{title}</span>
-            <button onClick={onClose} style={{
-              background: "#c42f1c", border: "2px solid #9c1c0b",
-              borderBottom: "3px solid #9c1c0b", borderRadius: 4,
-              width: 24, height: 24, color: "#F9E076",
-              fontSize: 12, fontWeight: 700, cursor: "pointer",
-              display: "flex", alignItems: "center", justifyContent: "center",
-            }}>✕</button>
-          </div>
-          {/* 본문 */}
-          <div style={{
-            background: "#FFFDD0",
-            padding: "16px",
-            overflowY: "auto",
-            maxHeight: "75vh",
-          }}>
-            {children}
-          </div>
+          {icon && <span style={{ fontSize: 18, lineHeight: 1, display: "inline-flex",
+                                   alignItems: "center" }}>{icon}</span>}
+          <span style={{
+            fontSize: 14, fontWeight: 700,
+            color: "#2a1a0a", fontFamily: "monospace",
+            textShadow: "1px 1px 0 rgba(255,255,255,0.3)",
+            flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+            lineHeight: 1,
+          }}>{title}</span>
+          <button onClick={onClose} style={{
+            flexShrink: 0, width: 26, height: 26,
+            background: "#e43b44",
+            border: "2px solid #3f2832",
+            boxShadow: "inset 0 2px 0 #ee686e, inset 0 -2px 0 #9e2835",
+            color: "#ffffff", fontSize: 14, fontWeight: 900,
+            cursor: "pointer", outline: "none", padding: 0,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            lineHeight: 1,
+            clipPath: "polygon(3px 0,calc(100% - 3px) 0,100% 3px,100% calc(100% - 3px),calc(100% - 3px) 100%,3px 100%,0 calc(100% - 3px),0 3px)",
+          }}>✕</button>
+        </div>
+        {/* 본문 (픽셀 박스) */}
+        <div style={{
+          background: bodyGrad,
+          boxShadow: sideShadow,
+          padding: `${px*4}px ${px*5}px ${px*5}px`,
+          color: "#2a1a0a",
+          fontFamily: "monospace",
+          overflowY: "auto",
+          maxHeight: "75vh",
+          flex: 1,
+          clipPath: bodyClipPath,
+        }}>
+          {children}
         </div>
       </div>
     </>

@@ -1,9 +1,19 @@
 import { useState, useEffect, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
-import SharedHeader from "../components/SharedHeader"
+import SharedHeader, {
+  PIX, BODY_HI, BODY_MAIN, BODY_DARK,
+  LIME_HI, LIME_MAIN, LIME_DARK,
+  AMBER_MAIN,
+  COLOR_TEXT, COLOR_TEXT_SUB, COLOR_NEUTRAL, COLOR_FOCUS, COLOR_UNFOCUS,
+  pixClip, pixClipSm, bodyGrad, limeGrad, sideShadow,
+} from "../components/SharedHeader"
 
 const BASE = import.meta.env.VITE_API_URL || "http://localhost:8000"
 const HDR  = { "X-User-Id": "1" }
+
+// SharedHeader에서 가져온 토큰 alias (기존 변수명 유지)
+const PIX_CLIP    = pixClip
+const PIX_CLIP_SM = pixClipSm
 
 // ── 헬퍼 ──────────────────────────────────────────────────────
 
@@ -24,8 +34,8 @@ function secToLabel(sec) {
 function gradeColor(score) {
   if (score >= 90) return "#1aa870"   // S - 진한 초록
   if (score >= 70) return "#22c98a"   // A/B - 초록
-  if (score >= 50) return "#FFC107"   // C - 앰버
-  return "#d94040"                    // D - 빨강
+  if (score >= 50) return AMBER_MAIN  // C - 앰버
+  return COLOR_UNFOCUS                // D - 빨강
 }
 
 function grade(score) {
@@ -36,13 +46,44 @@ function grade(score) {
   return "D"
 }
 
+// 인접한(또는 짧은 간격으로 떨어진) 미집중 구간을 하나로 병합
+// gapTolerance(초): 이 간격 이내면 같은 구간으로 본다 (기본 30초 = 짧은 한눈팔이 흡수)
+function mergeAdjacentSegments(segs, gapTolerance = 30) {
+  if (!segs || segs.length === 0) return []
+  const sorted = [...segs].sort((a, b) => a.start_sec - b.start_sec)
+  const merged = []
+  let cur = { ...sorted[0] }
+  let scoreSum = (cur.avg_score ?? 0) * (cur.end_sec - cur.start_sec)
+  let durSum   = cur.end_sec - cur.start_sec
+
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i]
+    // 같은 세션 내에서 간격이 gapTolerance 이내면 병합
+    if (next.session_id === cur.session_id && next.start_sec <= cur.end_sec + gapTolerance) {
+      cur.end_sec = Math.max(cur.end_sec, next.end_sec)
+      const nDur = next.end_sec - next.start_sec
+      scoreSum += (next.avg_score ?? 0) * nDur
+      durSum   += nDur
+    } else {
+      cur.avg_score = durSum > 0 ? scoreSum / durSum : cur.avg_score
+      merged.push(cur)
+      cur = { ...next }
+      scoreSum = (cur.avg_score ?? 0) * (cur.end_sec - cur.start_sec)
+      durSum   = cur.end_sec - cur.start_sec
+    }
+  }
+  cur.avg_score = durSum > 0 ? scoreSum / durSum : cur.avg_score
+  merged.push(cur)
+  return merged
+}
+
 // ── 서브 컴포넌트 ─────────────────────────────────────────────
 
 function Card({ children, style = {} }) {
   return (
     <div style={{
-      background: "#ffffff", border: "1px solid #e8dcc0",
-      borderRadius: 10, padding: 16, boxShadow: "0 2px 8px rgba(137,81,41,0.08)",
+      background: bodyGrad, boxShadow: sideShadow,
+      clipPath: pixClip, padding: 16,
       ...style,
     }}>
       {children}
@@ -52,7 +93,8 @@ function Card({ children, style = {} }) {
 
 function CardTitle({ children }) {
   return (
-    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: "#895129" }}>
+    <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLOR_TEXT_SUB,
+                  fontFamily: "monospace" }}>
       {children}
     </div>
   )
@@ -61,9 +103,8 @@ function CardTitle({ children }) {
 function Skeleton({ w = "100%", h = 18, style = {} }) {
   return (
     <div style={{
-      width: w, height: h, borderRadius: 4,
-      background: "linear-gradient(90deg,#f0e8d8 25%,#f9f5ea 50%,#f0e8d8 75%)",
-      backgroundSize: "200% 100%",
+      width: w, height: h, clipPath: pixClipSm,
+      background: BODY_DARK,
       animation: "shimmer 1.5s infinite",
       ...style,
     }} />
@@ -71,20 +112,27 @@ function Skeleton({ w = "100%", h = 18, style = {} }) {
 }
 
 // ── 시간대별 집중도 바 차트 ────────────────────────────────────
-// focusLogs: [{video_time_sec, focus_score}]
-// 0~23시 슬롯으로 집계
+// focusLogs: [{video_time_sec, focus_score, session_created_at}]
+// 실제 시각(0~23시) 슬롯으로 집계
 function HourlyChart({ focusLogs, loading }) {
   const hourly = Array(24).fill(null)
 
   if (focusLogs.length > 0) {
-    // focus_log의 video_time_sec은 강의 내 시간 기준
-    // 실제 시각은 없으므로 오늘 세션 시간대를 시뮬레이션
-    // → 각 log를 비율로 0~23 슬롯에 매핑
-    const maxSec = Math.max(...focusLogs.map(l => l.video_time_sec), 1)
     const buckets = Array(24).fill(null).map(() => [])
     focusLogs.forEach(l => {
-      const slot = Math.min(23, Math.floor((l.video_time_sec / maxSec) * 24))
-      buckets[slot].push(l.focus_score)
+      // 세션 시작 시각 + 영상 내 경과 초 = 실제 시각
+      let actualHour = null
+      if (l.session_created_at) {
+        const sessStart = new Date(l.session_created_at)
+        const actualTime = new Date(sessStart.getTime() + (l.video_time_sec || 0) * 1000)
+        actualHour = actualTime.getHours()
+      } else if (l.created_at) {
+        // log에 직접 시각이 있는 경우 (백엔드가 제공하면)
+        actualHour = new Date(l.created_at).getHours()
+      }
+      if (actualHour !== null && actualHour >= 0 && actualHour < 24) {
+        buckets[actualHour].push(l.focus_score)
+      }
     })
     buckets.forEach((b, i) => {
       if (b.length > 0) {
@@ -99,7 +147,7 @@ function HourlyChart({ focusLogs, loading }) {
       {loading ? (
         <Skeleton h={80} />
       ) : focusLogs.length === 0 ? (
-        <div style={{ fontSize: 12, color: "#8a7a60", textAlign: "center", padding: "20px 0" }}>
+        <div style={{ fontSize: 12, color: COLOR_NEUTRAL, textAlign: "center", padding: "20px 0" }}>
           아직 수강 데이터가 없어요
         </div>
       ) : (
@@ -107,27 +155,28 @@ function HourlyChart({ focusLogs, loading }) {
           <div style={{ display: "flex", alignItems: "flex-end", height: 80, gap: 2 }}>
             {hourly.map((v, i) => {
               const pct = v ?? 0
-              const color = pct >= 70 ? "#22c98a" : pct >= 40 ? "#FFC107" : pct > 0 ? "#d94040" : "#e8dcc0"
+              const color = pct >= 70 ? "#22c98a" : pct >= 40 ? AMBER_MAIN : pct > 0 ? COLOR_UNFOCUS : BODY_DARK
               return (
                 <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column",
                                        alignItems: "center", gap: 2 }}>
                   <div style={{
                     width: "100%", height: pct === 0 ? 2 : `${Math.max(4, pct)}%`,
-                    background: color, borderRadius: "3px 3px 0 0",
+                    background: color,
                     opacity: pct === 0 ? 0.15 : 0.9, transition: "height 0.4s",
-                  }} />
+                  }}
+                       title={pct > 0 ? `${i}시: ${pct}점` : `${i}시: 데이터 없음`} />
                   {i % 4 === 0 && (
-                    <div style={{ fontSize: 9, color: "#a89878" }}>{i}시</div>
+                    <div style={{ fontSize: 9, color: COLOR_NEUTRAL }}>{i}시</div>
                   )}
                 </div>
               )
             })}
           </div>
           <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
-            {[["#22c98a", "집중 (70↑)"], ["#FFC107", "보통 (40~70)"], ["#d94040", "미집중 (↓40)"]].map(([c, l]) => (
+            {[["#22c98a", "집중 (70↑)"], [AMBER_MAIN, "보통 (40~70)"], [COLOR_UNFOCUS, "미집중 (↓40)"]].map(([c, l]) => (
               <div key={l} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10 }}>
-                <div style={{ width: 8, height: 8, borderRadius: 2, background: c }} />
-                <span style={{ color: "#8a7a60" }}>{l}</span>
+                <div style={{ width: 8, height: 8, background: c }} />
+                <span style={{ color: COLOR_NEUTRAL }}>{l}</span>
               </div>
             ))}
           </div>
@@ -142,7 +191,7 @@ function HourlyChart({ focusLogs, loading }) {
 function SubjectChart({ sessions, loading }) {
   // subject별 avg_focus 평균
   const subjectMap = {}
-  const COLORS = { "수학": "#895129", "영어": "#22c98a", "물리": "#7c6ff7",
+  const COLORS = { "수학": COLOR_TEXT_SUB, "영어": "#22c98a", "물리": "#7c6ff7",
                    "화학": "#FFC107", "과학": "#d94040", "국어": "#38a4f8" }
 
   sessions.forEach(s => {
@@ -154,7 +203,7 @@ function SubjectChart({ sessions, loading }) {
   const subjects = Object.entries(subjectMap).map(([name, scores]) => ({
     name,
     score: Math.round((scores.reduce((a, v) => a + v, 0) / scores.length) * 100),
-    color: COLORS[name] ?? "#8a7a60",
+    color: COLORS[name] ?? COLOR_NEUTRAL,
   })).sort((a, b) => b.score - a.score)
 
   return (
@@ -165,7 +214,7 @@ function SubjectChart({ sessions, loading }) {
           {[1, 2, 3].map(i => <Skeleton key={i} h={30} style={{ marginBottom: 10 }} />)}
         </>
       ) : subjects.length === 0 ? (
-        <div style={{ fontSize: 12, color: "#8a7a60", textAlign: "center", padding: "20px 0" }}>
+        <div style={{ fontSize: 12, color: COLOR_NEUTRAL, textAlign: "center", padding: "20px 0" }}>
           수강한 과목 데이터가 없어요
         </div>
       ) : subjects.map((s, i) => (
@@ -176,14 +225,14 @@ function SubjectChart({ sessions, loading }) {
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <span style={{ color: s.color, fontWeight: 700 }}>{s.score}점</span>
               <span style={{ background: s.color + "33", color: s.color,
-                             fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 4 }}>
+                             fontSize: 10, fontWeight: 700, padding: "1px 6px", clipPath: PIX_CLIP_SM }}>
                 {grade(s.score)}
               </span>
             </div>
           </div>
-          <div style={{ height: 6, background: "#f0e8d8", borderRadius: 3 }}>
+          <div style={{ height: 6, background: BODY_DARK }}>
             <div style={{ width: `${s.score}%`, height: "100%", background: s.color,
-                          borderRadius: 3, transition: "width 0.6s ease" }} />
+                          transition: "width 0.6s ease" }} />
           </div>
         </div>
       ))}
@@ -208,17 +257,17 @@ function QuizScoreHistory({ scores, loading }) {
     byLecture[s.lecture_title].push(s.total)
   })
 
-  const scoreColor = (v) => v >= 70 ? "#22c98a" : v >= 40 ? "#FFC107" : "#d94040"
+  const scoreColor = (v) => v >= 70 ? "#22c98a" : v >= 40 ? AMBER_MAIN : COLOR_UNFOCUS
 
   return (
     <Card>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
         <CardTitle style={{ margin:0 }}>🧠 LLM 퀴즈 이해도 기록</CardTitle>
-        <div style={{ fontSize:10, color:"#8a7a60" }}>최근 {scores.length}건</div>
+        <div style={{ fontSize:10, color:COLOR_NEUTRAL }}>최근 {scores.length}건</div>
       </div>
 
       {scores.length === 0 ? (
-        <div style={{ fontSize:12, color:"#8a7a60", textAlign:"center", padding:"20px 0" }}>
+        <div style={{ fontSize:12, color:COLOR_NEUTRAL, textAlign:"center", padding:"20px 0" }}>
           퀴즈 기록이 없어요. 강의 수강 후 포석호와 퀴즈를 풀어보세요! 🐻‍❄️
         </div>
       ) : (
@@ -236,16 +285,16 @@ function QuizScoreHistory({ scores, loading }) {
                     <div style={{ display:"flex", gap:8, alignItems:"center" }}>
                       <span style={{ color, fontWeight:700 }}>{avg}점</span>
                       <span style={{ fontSize:10, background:color+"33", color,
-                                     padding:"1px 6px", borderRadius:4, fontWeight:700 }}>
+                                     padding:"1px 6px", clipPath:PIX_CLIP_SM, fontWeight:700 }}>
                         {avg>=70?"B이상":avg>=40?"C":"D"}
                       </span>
                     </div>
                   </div>
-                  <div style={{ height:6, background:"#f0e8d8", borderRadius:3 }}>
+                  <div style={{ height:6, background:BODY_DARK }}>
                     <div style={{ width:`${avg}%`, height:"100%", background:color,
-                                  borderRadius:3, transition:"width 0.6s ease" }} />
+                                  transition:"width 0.6s ease" }} />
                   </div>
-                  <div style={{ fontSize:10, color:"#8a7a60", marginTop:2 }}>
+                  <div style={{ fontSize:10, color:COLOR_NEUTRAL, marginTop:2 }}>
                     {vals.length}회 응답 · 최고 {Math.max(...vals)}점
                   </div>
                 </div>
@@ -255,7 +304,7 @@ function QuizScoreHistory({ scores, loading }) {
 
           {/* 최근 5개 상세 */}
           <div style={{ borderTop:"1px solid #f0e8d8", paddingTop:10 }}>
-            <div style={{ fontSize:11, color:"#8a7a60", marginBottom:8, fontWeight:600 }}>최근 답변 기록</div>
+            <div style={{ fontSize:11, color:COLOR_NEUTRAL, marginBottom:8, fontWeight:600 }}>최근 답변 기록</div>
             {scores.slice(0,5).map((s,i) => {
               const color = scoreColor(s.total)
               return (
@@ -267,7 +316,7 @@ function QuizScoreHistory({ scores, loading }) {
                       <span style={{ fontSize:9, background: s.match_result==="일치" ? "#e0f5ec"
                                                              : s.match_result==="부분일치" ? "#fff4cc" : "#fdecea",
                                      color: s.match_result==="일치" ? "#187050"
-                                          : s.match_result==="부분일치" ? "#895129" : "#c42f1c",
+                                          : s.match_result==="부분일치" ? COLOR_TEXT_SUB : "#c42f1c",
                                      padding:"1px 6px", borderRadius:4 }}>
                         {s.match_result || "채점됨"}
                       </span>
@@ -281,10 +330,10 @@ function QuizScoreHistory({ scores, loading }) {
                       { label:"구체", val:s.detail,   max:20 },
                     ].map(item => (
                       <div key={item.label} style={{ flex:1 }}>
-                        <div style={{ fontSize:9, color:"#8a7a60", marginBottom:1 }}>
+                        <div style={{ fontSize:9, color:COLOR_NEUTRAL, marginBottom:1 }}>
                           {item.label} {item.val}
                         </div>
-                        <div style={{ height:3, background:"#f0e8d8", borderRadius:2 }}>
+                        <div style={{ height:3, background:BODY_DARK, borderRadius:2 }}>
                           <div style={{ width:`${(item.val/item.max)*100}%`, height:"100%",
                                         background: scoreColor(item.val/item.max*100),
                                         borderRadius:2 }} />
@@ -308,9 +357,9 @@ function QuizScoreHistory({ scores, loading }) {
                     </div>
                   )}
                   {s.comment && (
-                    <div style={{ fontSize:10, color:"#555", marginTop:4 }}>💬 {s.comment}</div>
+                    <div style={{ fontSize:10, color:COLOR_NEUTRAL, marginTop:4 }}>💬 {s.comment}</div>
                   )}
-                  <div style={{ fontSize:9, color:"#a89878", marginTop:3 }}>
+                  <div style={{ fontSize:9, color:COLOR_NEUTRAL, marginTop:3 }}>
                     {new Date(s.created_at).toLocaleString("ko-KR")}
                   </div>
                 </div>
@@ -337,33 +386,48 @@ function UnfocusedSegments({ segments, sessions, loading, navigate }) {
     <Card>
       <CardTitle>미집중 구간 모음</CardTitle>
       {segments.length === 0 ? (
-        <div style={{ fontSize: 12, color: "#8a7a60", textAlign: "center", padding: "20px 0" }}>
+        <div style={{ fontSize: 12, color: COLOR_NEUTRAL, textAlign: "center", padding: "20px 0" }}>
           오늘 미집중 구간이 없어요 🎉
         </div>
-      ) : segments.slice(0, 5).map((seg, i) => (
-        <div key={i} style={{ display: "flex", justifyContent: "space-between",
-                               alignItems: "center", padding: "8px 0",
-                               borderBottom: "1px solid #f0e8d8", fontSize: 12 }}>
-          <div>
-            <div style={{ color: "#4a3d28", fontWeight:700 }}>{secToLabel(seg.start_sec)}</div>
-            <div style={{ color: "#8a7a60", fontSize: 11 }}>
-              {seg.lecture_title ?? "강의"} · {Math.round(seg.end_sec - seg.start_sec)}초
+      ) : segments.slice(0, 5).map((seg, i) => {
+        const durSec = Math.round(seg.end_sec - seg.start_sec)
+        const durMin = Math.round(durSec / 60)
+        return (
+          <div key={i} style={{ display: "flex", justifyContent: "space-between",
+                                 alignItems: "center", padding: "8px 0",
+                                 borderBottom: "1px solid #f0e8d8", fontSize: 12 }}>
+            <div>
+              <div style={{ color: "#4a3d28", fontWeight:700, display:"flex", alignItems:"center", gap:6 }}>
+                {secToLabel(seg.start_sec)}
+                {durMin >= 2 && (
+                  <span style={{ fontSize: 9, color: COLOR_UNFOCUS, background: "#fff0f0",
+                                 border: `1px solid ${COLOR_UNFOCUS}`, borderRadius: 3,
+                                 padding: "1px 5px", fontWeight: 700 }}>
+                    {durMin}분 연속
+                  </span>
+                )}
+              </div>
+              <div style={{ color: COLOR_NEUTRAL, fontSize: 11 }}>
+                {seg.lecture_title ?? "강의"} · {durSec >= 60 ? `${durMin}분` : `${durSec}초`}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ color: COLOR_UNFOCUS, fontSize: 11 }}>
+                {Math.round(seg.avg_score * 100)}점
+              </span>
+              <button
+                onClick={() => navigate("/lecture", { state: { seekTo: seg.start_sec } })}
+                style={{ fontSize: 10, background: LIME_MAIN, border: `2px solid ${PIX}`,
+                         borderBottom: `4px solid ${PIX}`,
+                         boxShadow: `inset 0 2px 0 ${LIME_HI}`,
+                         clipPath: pixClip, padding: "3px 8px",
+                         cursor: "pointer", fontWeight: 700, color: "#2a1a0a", fontFamily: "monospace" }}>
+                다시보기
+              </button>
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ color: "#d94040", fontSize: 11 }}>
-              {Math.round(seg.avg_score * 100)}점
-            </span>
-            <button
-              onClick={() => navigate("/lecture", { state: { seekTo: seg.start_sec } })}
-              style={{ fontSize: 10, background: "#895129", border: "none",
-                       borderRadius: 5, padding: "3px 8px",
-                       cursor: "pointer", fontWeight: 700, color: "#ffffff" }}>
-              다시보기
-            </button>
-          </div>
-        </div>
-      ))}
+        )
+      })}
     </Card>
   )
 }
@@ -381,7 +445,7 @@ function WeeklyTrend({ weeklyData, loading }) {
         <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 70 }}>
           {days.map((day, i) => {
             const score = weeklyData[i] ?? 0
-            const color = score >= 70 ? "#22c98a" : score >= 40 ? "#FFC107" : score > 0 ? "#d94040" : "#e8dcc0"
+            const color = score >= 70 ? "#22c98a" : score >= 40 ? AMBER_MAIN : score > 0 ? COLOR_UNFOCUS : BODY_DARK
             return (
               <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column",
                                      alignItems: "center", gap: 4 }}>
@@ -390,7 +454,7 @@ function WeeklyTrend({ weeklyData, loading }) {
                                background: color, borderRadius: "3px 3px 0 0",
                                opacity: score === 0 ? 0.2 : 0.9,
                                transition: "height 0.5s ease" }} />
-                <div style={{ fontSize: 10, color: "#8a7a60" }}>{day}</div>
+                <div style={{ fontSize: 10, color: COLOR_NEUTRAL }}>{day}</div>
                 {score > 0 && <div style={{ fontSize: 9, color: "#4a3d28", fontWeight:700 }}>{score}</div>}
               </div>
             )
@@ -451,12 +515,15 @@ export default function DashboardPage() {
         console.log(`[Dashboard] 오늘 세션 ${sessData.length}개 로드됨`, sessData)
         setSessions(sessData)
 
-        // 2) 각 세션 timeline 병렬 fetch
+        // 2) 각 세션 timeline 병렬 fetch (각 log에 세션의 created_at 주입)
         const timelines = await Promise.all(
           sessData.map(s =>
             fetch(`${BASE}/focus/session/${s.session_id}`, { headers: HDR })
               .then(r => r.ok ? r.json() : { logs: [] })
-              .then(d => d.logs ?? [])
+              .then(d => (d.logs ?? []).map(log => ({
+                ...log,
+                session_created_at: s.created_at,  // 세션 시작 시각 추가
+              })))
               .catch(err => {
                 console.warn(`[Dashboard] 세션 ${s.session_id} timeline 실패`, err)
                 return []
@@ -494,7 +561,10 @@ export default function DashboardPage() {
           })
         })
         console.log(`[Dashboard] 미집중 구간 ${segs.length}개 추출됨`)
-        setLowSegs(segs)
+        // 인접한 구간 병합 → 연속된 미집중 시간을 하나의 구간으로 표시
+        const mergedSegs = mergeAdjacentSegments(segs, 30)
+        console.log(`[Dashboard] 병합 후 ${mergedSegs.length}개`)
+        setLowSegs(mergedSegs)
 
       } catch (err) {
         console.error("[Dashboard] loadSessions 실패:", err)
@@ -545,8 +615,8 @@ export default function DashboardPage() {
 
   return (
     <div style={{
-      width: "100%", height: "100%", background: "#f9f5ea",
-      color: "#4a3d28", fontFamily: "'Noto Sans KR',sans-serif",
+      width: "100%", height: "100%", background: BODY_MAIN,
+      color: "#2a1a0a", fontFamily: "monospace",
       overflow: "auto", display: "flex", flexDirection: "column",
     }}>
       <style>{`
@@ -559,19 +629,23 @@ export default function DashboardPage() {
       <SharedHeader showHome />
 
       {/* 서브 헤더 */}
-      <div style={{ padding: "12px 20px", borderBottom: "3px solid #c89100",
-                    background: "linear-gradient(180deg, #F9E076 0%, #e8c550 100%)",
+      <div style={{ background: limeGrad, boxShadow: sideShadow,
+                    padding: "9px 20px", flexShrink: 0,
                     display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ fontWeight: 700, fontSize: 16, color: "#2a1a0a" }}>📊 학습 리포트</div>
+        <span style={{ fontWeight: 700, fontSize: 13, color: "#2a1a0a", fontFamily: "monospace" }}>
+          📊 학습 리포트
+        </span>
         <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
           {["오늘", "이번 주", "이번 달"].map(t => (
             <button key={t} onClick={() => setTab(t)}
-              style={{ padding: "4px 12px", fontSize: 11, fontWeight: 700,
-                       background: tab === t ? "#895129" : "transparent",
-                       color: tab === t ? "#FFFDD0" : "#895129",
-                       border: "1px solid",
-                       borderColor: tab === t ? "#895129" : "#e8c550",
-                       borderRadius: 20, cursor: "pointer" }}>
+              style={{ padding: "3px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+                       fontFamily: "monospace",
+                       background: tab === t ? LIME_DARK : "transparent",
+                       color: tab === t ? "#FFFDD0" : "#2a1a0a",
+                       border: `2px solid ${PIX}`,
+                       borderBottom: tab === t ? `4px solid ${PIX}` : `2px solid ${PIX}`,
+                       boxShadow: tab === t ? "none" : `inset 0 2px 0 ${LIME_HI}`,
+                       clipPath: pixClip }}>
               {t}
             </button>
           ))}
@@ -580,28 +654,33 @@ export default function DashboardPage() {
 
       <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
 
-        {/* ── 요약 카드 3개 (복습 대기 제거) ── */}
+        {/* ── 요약 카드 3개 ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
           {[
-            { label: "연속 출석",      value: user ? `${user.streak_days}일`        : "--", color: "#e67e22", loading: loadingUser },
-            { label: "오늘 집중 시간", value: user ? formatFocusSec(focusSec)       : "--", color: "#22c98a", loading: loadingUser },
-            { label: "레벨",           value: user ? `Lv.${user.level}`             : "--", color: "#7c6ff7", loading: loadingUser },
+            { label: "연속 출석",      value: user ? `${user.streak_days}일`  : "--", color: "#e67e22", loading: loadingUser },
+            { label: "오늘 집중 시간", value: user ? formatFocusSec(focusSec) : "--", color: "#22c98a", loading: loadingUser },
+            { label: "레벨",           value: user ? `Lv.${user.level}`       : "--", color: "#7c6ff7", loading: loadingUser },
           ].map((c, i) => (
-            <div key={i} style={{ background: "#ffffff", border: `2px solid ${c.color}55`,
-                                   borderRadius: 10, padding: 14, textAlign: "center",
-                                   boxShadow: `0 2px 8px ${c.color}22` }}>
-              <div style={{ fontSize: 11, color: "#8a7a60", marginBottom: 6 }}>{c.label}</div>
-              {c.loading ? (
-                <Skeleton h={32} style={{ margin: "0 auto", width: "60%" }} />
-              ) : (
-                <div style={{ fontSize: 26, fontWeight: 700, color: c.color }}>{c.value}</div>
-              )}
+            <div key={i} style={{ clipPath: pixClip, overflow: "hidden",
+                                   boxShadow: "0 4px 16px rgba(0,0,0,0.18)", fontFamily: "monospace" }}>
+              <div style={{ background: limeGrad, boxShadow: sideShadow,
+                             padding: "6px 14px", fontSize: 10, fontWeight: 700, color: "#2a1a0a" }}>
+                {c.label}
+              </div>
+              <div style={{ background: bodyGrad, boxShadow: sideShadow,
+                             padding: "14px 16px", textAlign: "center" }}>
+                {c.loading ? (
+                  <Skeleton h={32} style={{ margin: "0 auto", width: "60%" }} />
+                ) : (
+                  <div style={{ fontSize: 26, fontWeight: 700, color: c.color, lineHeight: 1 }}>{c.value}</div>
+                )}
+              </div>
             </div>
           ))}
         </div>
 
         {/* ── 상단 2컬럼: 시간대별 집중도 + 주간 트렌드 ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <HourlyChart focusLogs={focusLogs} loading={loadingSessions} />
           <WeeklyTrend weeklyData={weeklyData} loading={loadingSessions} />
         </div>
@@ -617,7 +696,7 @@ export default function DashboardPage() {
         </div>
 
         {/* ── 하단 2컬럼: LLM 이해도 기록 + 오늘 수강 세션 ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12, alignItems: "start" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "start" }}>
           <QuizScoreHistory scores={quizScores} loading={loadingScores} />
 
           {/* 오늘 수강 세션 목록 */}
@@ -626,12 +705,12 @@ export default function DashboardPage() {
             {loadingSessions ? (
               [1, 2, 3].map(i => <Skeleton key={i} h={44} style={{ marginBottom: 8 }} />)
             ) : sessions.length === 0 ? (
-              <div style={{ fontSize: 12, color: "#8a7a60", textAlign: "center", padding: "20px 0" }}>
+              <div style={{ fontSize: 12, color: COLOR_NEUTRAL, textAlign: "center", padding: "20px 0" }}>
                 오늘 수강한 강의가 없어요
               </div>
             ) : sessions.map((s, i) => {
               const pct = s.avg_focus ? Math.round(s.avg_focus * 100) : null
-              const color = pct ? gradeColor(pct) : "#8a7a60"
+              const color = pct ? gradeColor(pct) : COLOR_NEUTRAL
               return (
                 <div key={i} style={{ display: "flex", justifyContent: "space-between",
                                        alignItems: "center", padding: "8px 0",
@@ -641,19 +720,21 @@ export default function DashboardPage() {
                                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {s.lecture_title}
                     </div>
-                    <div style={{ fontSize: 10, color: "#8a7a60" }}>{s.subject}</div>
+                    <div style={{ fontSize: 10, color: COLOR_NEUTRAL }}>{s.subject}</div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: 8 }}>
                     {pct !== null ? (
                       <span style={{ color, fontWeight: 700 }}>{pct}점</span>
                     ) : (
-                      <span style={{ color: "#8a7a60", fontSize: 10 }}>수강 중</span>
+                      <span style={{ color: COLOR_NEUTRAL, fontSize: 10 }}>수강 중</span>
                     )}
                     <button
                       onClick={() => navigate("/lecture")}
-                      style={{ fontSize: 10, background: "#895129", border: "none",
-                               borderRadius: 5, padding: "3px 8px",
-                               cursor: "pointer", color: "#FFFDD0" }}>
+                      style={{ fontSize: 10, background: LIME_MAIN, border: `2px solid ${PIX}`,
+                               borderBottom: `4px solid ${PIX}`,
+                               boxShadow: `inset 0 2px 0 ${LIME_HI}`,
+                               clipPath: pixClip, padding: "3px 8px",
+                               cursor: "pointer", fontWeight: 700, color: "#2a1a0a", fontFamily: "monospace" }}>
                       이어보기
                     </button>
                   </div>
